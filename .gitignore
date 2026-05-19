@@ -1,9 +1,0 @@
-__pycache__/
-*.py[cod]
-
-.runtime/
-.codex/
-
-data/
-!data/.gitkeep
-
