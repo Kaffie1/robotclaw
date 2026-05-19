@@ -1,0 +1,113 @@
+version: 1
+description: package deploy playbook
+
+playbooks:
+  - id: package-deploy
+    type: normal
+    title: 整包部署
+    root:
+      type: sequence
+      name: deploy_package_on_orin
+      display_name: 执行整包部署
+      children:
+        - type: action
+          name: prepare_package_source
+          display_name: 准备部署安装包来源
+          tool_name: package_prepare_source
+          arguments: {}
+          failure_message: 安装包来源准备失败，请检查本地上传文件或文件服务器路径
+        - type: action
+          name: stage_package_to_remote_target
+          display_name: 准备远端安装包
+          tool_name: package_stage_remote
+          arguments:
+            device_type:
+              from_context: device_type
+            remote_deb_path:
+              from_context: remote_deb_path
+            file_name:
+              from_context: file_name
+            cleanup_existing_remote_files:
+              from_context: cleanup_existing_remote_files
+          assert_ref: rule_2
+          failure_message: 远端安装包准备失败，请检查上传状态、远端目录权限或同名旧包清理结果
+        - type: condition
+          name: verify_remote_package_exists
+          display_name: 检查安装包是否存在
+          tool_name: remote_path_exists
+          arguments:
+            device_type:
+              from_context: device_type
+            path:
+              from_context: remote_deb_path
+          assert_ref: rule_1
+          failure_message: 远端安装包不存在，请先上传安装包或确认路径正确
+        - type: action
+          name: probe_package_machine_types
+          display_name: 识别整包支持的机型
+          tool_name: package_probe_machine_types
+          arguments:
+            device_type:
+              from_context: device_type
+            deb_path:
+              from_context: remote_deb_path
+            probe_command_template:
+              from_context: probe_command_template
+            fallback_machine_options:
+              from_context: fallback_machine_options
+          require_confirmation: true
+          confirmation:
+            when: after
+            mode: select
+            message: 请选择这次整包部署的目标机型
+            input:
+              type: index
+              auto_select_if_single: false
+              options_source:
+                field: raw_result
+                list_key: machine_options
+            output:
+              store_as: machine_type
+              type: selected_option_value
+        - type: action
+          name: ensure_package_is_executable
+          display_name: 修复安装包执行权限
+          tool_name: remote_ensure_executable
+          arguments:
+            device_type:
+              from_context: device_type
+            path:
+              from_context: remote_deb_path
+          assert_ref: rule_2
+          failure_message: 安装包执行权限修复失败，请先检查文件权限
+        - type: action
+          name: install_package_on_selected_robot_type
+          display_name: 执行整包安装
+          tool_name: package_install
+          arguments:
+            device_type:
+              from_context: device_type
+            deb_path:
+              from_context: remote_deb_path
+            machine_type:
+              from_context: machine_type
+            install_template:
+              from_context: install_template
+            timeout_seconds: 1800
+          assert_ref: rule_3
+          failure_message: 安装命令执行失败，请查看安装包输出和目标环境
+    escalation_notes:
+      - "整包部署会先在任务内准备安装包来源，再上传到目标处理器执行安装"
+      - "如果安装包本身不支持当前机型，先重新确认机型或更换安装包"
+    execution_notes:
+      - "这是第一版部署行为树，目标是先打通整包部署编排链路"
+      - "安装前会先准备安装包来源，本地上传会复用本机临时文件，文件服务器路径会先下载到本机"
+      - "安装前会先修复安装包执行权限"
+      - "安装前会先执行 support_robot_types 识别安装包支持的机型，失败时回退到默认机型列表"
+      - "安装阶段会自动兼容支持或不支持 --user / --password 参数的安装包"
+      - "当前固定部署到 ORIN，不处理 PICO 和跳板部署"
+      - "当前版本安装完成后不执行健康检查，安装步骤成功即进入任务收口"
+
+global_rules:
+  - 整包部署会先准备安装包来源，再上传到目标处理器执行安装
+  - 第一版整包部署不自动回滚

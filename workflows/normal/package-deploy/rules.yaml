@@ -1,0 +1,32 @@
+version: 1
+description: package deploy rules
+
+rules:
+  rule_1:
+    type: compare
+    field: exists
+    op: boolean_true
+
+  rule_2:
+    type: compare
+    field: result.exit_code
+    op: equals
+    cast: number
+    value: 0
+
+  rule_3:
+    op: or
+    conditions:
+      - type: compare
+        field: result.exit_code
+        op: equals
+        cast: number
+        value: 0
+      - type: compare
+        field: output
+        op: contains
+        value: Update Version Success
+      - type: compare
+        field: output
+        op: contains
+        value: Deployment finished successfully
