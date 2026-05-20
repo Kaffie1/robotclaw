@@ -1,7 +1,6 @@
 from .registry import EmptyArgs, ToolRegistry, tool_registry
 from .base import ToolDefinition, ToolRuntime, build_tool_runtime, connected_tool
 from .docker import DockerComposeExecArgs, DockerComposeModuleArgs
-from .package import PackageInstallArgs
 from .remote import (
     DeviceTypeArgs,
     PingHostArgs,
@@ -22,7 +21,6 @@ __all__ = [
     "DockerComposeExecArgs",
     "DockerComposeModuleArgs",
     "EmptyArgs",
-    "PackageInstallArgs",
     "PingHostArgs",
     "RemoteCommandArgs",
     "RemoteEnvironmentVariableArgs",

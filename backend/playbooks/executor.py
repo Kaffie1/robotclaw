@@ -21,6 +21,20 @@ class PlaybookConfirmationRequired(Exception):
         self.request = request
 
 
+def _make_json_safe(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return {"type": "bytes", "size": len(value)}
+    if isinstance(value, dict):
+        return {str(key): _make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_make_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_make_json_safe(item) for item in value]
+    if isinstance(value, set):
+        return [_make_json_safe(item) for item in value]
+    return value
+
+
 def short_text(value: Any, *, limit: int = 320) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
@@ -34,8 +48,8 @@ def tool_call(tool_name: str, arguments: dict[str, Any], tool_context: dict[str,
         "playbook_tool_call_end",
         {
             "tool_name": tool_name,
-            "arguments": arguments,
-            "result": result,
+            "arguments": _make_json_safe(arguments),
+            "result": _make_json_safe(result),
         },
     )
     return {
@@ -51,7 +65,8 @@ def run_script_step(step: dict[str, Any], tool_context: dict[str, Any] | None) -
     raw_arguments = step.get("arguments") if isinstance(step.get("arguments"), dict) else {}
     arguments = expand_context_references(raw_arguments, tool_context)
     assert_ref = str(step.get("assert_ref") or step.get("expect") or "").strip()
-    wait_seconds = max(int(step.get("wait_seconds") or 0), 0)
+    resolved_wait_seconds = expand_context_references(step.get("wait_seconds"), tool_context)
+    wait_seconds = max(int(resolved_wait_seconds or 0), 0)
     if wait_seconds:
         logger.info("Playbook 步骤等待 | seconds=%d | step=%s | tool=%s", wait_seconds, name, tool_name)
         time.sleep(wait_seconds)
@@ -68,12 +83,14 @@ def run_script_step(step: dict[str, Any], tool_context: dict[str, Any] | None) -
     }
     assertion = evaluate_step_assertion(step, assertion_payload, tool_context=tool_context)
     passed = bool(assertion.get("passed"))
+    safe_arguments = _make_json_safe(arguments)
+    safe_raw_result = _make_json_safe(raw_result)
     step_result = {
         "name": name or tool_name,
         "tool_name": tool_name,
-        "arguments": arguments,
+        "arguments": safe_arguments,
         "output": short_text(raw_result),
-        "raw_result": raw_result,
+        "raw_result": safe_raw_result,
         "expect": assertion.get("rule_name") or assert_ref,
         "assert_ref": assertion.get("rule_name") or assert_ref,
         "assert_spec": assertion.get("rule_spec"),
@@ -104,7 +121,8 @@ def run_leaf_step(
     playbook_title: str,
     node_path: str,
 ) -> dict[str, Any]:
-    wait_seconds = max(int(node_spec.get("wait_seconds") or 0), 0)
+    resolved_wait_seconds = expand_context_references(node_spec.get("wait_seconds"), tool_context)
+    wait_seconds = max(int(resolved_wait_seconds or 0), 0)
     confirm_times = max(int(node_spec.get("confirm_times") or 1), 1)
     confirmation = node_spec.get("confirmation") if isinstance(node_spec.get("confirmation"), dict) else {}
     confirmation_when = str(confirmation.get("when") or "before").strip().lower()

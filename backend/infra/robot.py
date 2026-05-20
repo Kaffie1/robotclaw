@@ -247,6 +247,7 @@ class RobotClient:
         command: str,
         *,
         timeout: float | None = None,
+        input_text: str | None = None,
         output_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """执行真正的非交互 SSH 命令，避免依赖 invoke_shell + marker 收口。"""
@@ -259,6 +260,17 @@ class RobotClient:
             stdout_chunks: list[str] = []
             stderr_chunks: list[str] = []
             emitted_lines: list[str] = []
+
+            normalized_input_text = str(input_text or "")
+            if normalized_input_text:
+                stdin.write(normalized_input_text)
+                if not normalized_input_text.endswith("\n"):
+                    stdin.write("\n")
+                stdin.flush()
+            try:
+                stdin.channel.shutdown_write()
+            except Exception:  # noqa: BLE001
+                pass
 
             def emit_live_lines() -> None:
                 if not callable(output_callback):
@@ -355,9 +367,9 @@ class RobotClient:
         output_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """执行需要 sudo 权限的 shell 命令，返回包含 exit_code、stdout、stderr 的结果字典。
-            通过交互式方式输入密码，确保兼容各种 sudo 配置和提示。"""
+            通过非交互 stdin 输入密码，避免 invoke_shell/PTY 卡住部署流程。"""
         wrapped = f"sudo -S -p '' bash -lc {shlex.quote(command)}"
-        return self._exec_shell_command(wrapped, timeout=timeout, input_text=password, output_callback=output_callback)
+        return self._exec_noninteractive_command(wrapped, timeout=timeout, input_text=password, output_callback=output_callback)
 
     def exec_interactive_command(
         self,

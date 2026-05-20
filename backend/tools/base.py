@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from ..core.models import ApiError
 from ..shared.runtime import session_store
-from ..operations.deploy import create_package_target_client
+from ..operations.workflow import create_package_target_client
 from ..operations.services import ensure_client_connected
 
 

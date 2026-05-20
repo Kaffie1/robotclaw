@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from ...core.config import DOCKER_COMPOSE_UP_WAIT_SECONDS
 from ..base import ToolRuntime, connected_tool, with_target_tool_runtime
 from ..remote import DeviceTypeArgs
 from .impl import (
@@ -14,7 +13,6 @@ from .impl import (
 
 class DockerComposeModuleArgs(BaseModel):
     module_name: str
-    wait_seconds: int = DOCKER_COMPOSE_UP_WAIT_SECONDS
 
 
 class DockerComposeExecArgs(DeviceTypeArgs):
@@ -31,7 +29,7 @@ def handle_docker_compose_down_module(args: DockerComposeModuleArgs, runtime: To
 
 @connected_tool
 def handle_docker_compose_up_module(args: DockerComposeModuleArgs, runtime: ToolRuntime) -> dict[str, object]:
-    return docker_compose_up_module(runtime.client, args.module_name, wait_seconds=args.wait_seconds)
+    return docker_compose_up_module(runtime.client, args.module_name)
 
 
 def handle_docker_compose_exec_command(args: DockerComposeExecArgs, tool_context: dict[str, object] | None) -> dict[str, object]:

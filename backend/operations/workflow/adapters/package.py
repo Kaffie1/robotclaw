@@ -1,43 +1,19 @@
 import posixpath
 from typing import Any
 
-from ...core.models import TaskFailure
-from ...infra.stores import TaskContext
-from ...shared.runtime import upload_progress_manager
-from ...shared.confirmation import apply_confirmation_response
-from ...common import (
+from ....core.models import TaskFailure
+from ....infra.stores import TaskContext
+from ....shared.runtime import upload_progress_manager
+from ....shared.confirmation import apply_confirmation_response
+from ....common import (
     detect_ignored_package_install_error,
     extract_critical_command_warnings,
     log_command_result,
     render_remote_command,
 )
-from ..services import robot_identity
-from .common import create_package_target_client
-
-
-def _find_playbook_step(playbook_result: dict[str, Any], tool_name: str) -> dict[str, Any] | None:
-    """在 workflow 的执行结果中查找指定工具的步骤，返回该步骤的原始结果"""
-    for step in playbook_result.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        if str(step.get("tool_name") or "").strip() == tool_name:
-            return step
-    return None
-
-
-def _log_playbook_steps(ctx: TaskContext, playbook_result: dict[str, Any]) -> None:
-    """将 workflow 的每个步骤的状态和消息都记录到任务日志中，方便用户查看和排查问题"""
-    playbook_title = str(playbook_result.get("playbook_title") or playbook_result.get("playbook_id") or "workflow").strip()
-    ctx.log(f"开始执行 workflow: {playbook_title}")
-    for step in playbook_result.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        step_name = str(step.get("name") or step.get("tool_name") or "step").strip()
-        status_text = "成功" if bool(step.get("passed")) else "失败"
-        ctx.log(f"Workflow 步骤[{status_text}]: {step_name}")
-    conclusion = str(playbook_result.get("conclusion") or "").strip()
-    if conclusion:
-        ctx.log(f"Workflow 结论: {conclusion}")
+from ...services import robot_identity
+from ..common import create_package_target_client, find_playbook_step
+from ..task_support import build_workflow_status_reporter, log_playbook_steps
 
 
 def _append_stage_logs(ctx: TaskContext, stage_payload: dict[str, Any], source_metadata: dict[str, Any] | None) -> None:
@@ -63,68 +39,22 @@ def _append_stage_logs(ctx: TaskContext, stage_payload: dict[str, Any], source_m
     ctx.log(f"上传安装包到 {stage_payload.get('resolved_remote_path') or stage_payload.get('remote_deb_path')}")
 
 
-def _build_playbook_status_reporter(
-    ctx: TaskContext,
-    *,
-    upload_token: str,
-    tool_context: dict[str, Any],
-) -> Any:
-    """构建一个 workflow 状态报告函数，用于将 workflow 的当前阶段和消息实时更新到上传进度中"""
-    state = {"last_path": "", "last_message": ""}
+def _build_playbook_status_reporter(ctx: TaskContext, *, upload_token: str, tool_context: dict[str, Any]) -> Any:
+    def progress_transformer(progress_info: dict[str, str], active_tool_context: dict[str, Any]) -> dict[str, str]:
+        raw_source_metadata = (active_tool_context or {}).get("source_metadata")
+        source_metadata = raw_source_metadata if isinstance(raw_source_metadata, dict) else {}
+        if progress_info["step_name"] == "prepare_package_source" and str(source_metadata.get("source_kind") or "").strip() == "file_server":
+            progress_info["phase"] = "downloading_from_server"
+        return progress_info
 
-    def resolve_phase(message: str) -> str:
-        if "准备部署安装包来源" in message:
-            raw_source_metadata = (tool_context or {}).get("source_metadata")
-            source_metadata = raw_source_metadata if isinstance(raw_source_metadata, dict) else {}
-            source_kind = str(source_metadata.get("source_kind") or "").strip()
-            return "downloading_from_server" if source_kind == "file_server" else "preparing"
-        if "准备远端安装包" in message:
-            return "uploading_to_robot"
-        if "检查安装包是否存在" in message:
-            return "preparing"
-        if "识别整包支持的机型" in message:
-            return "probing_machine_type"
-        if "修复安装包执行权限" in message:
-            return "installing"
-        if "执行整包安装" in message:
-            return "installing"
-        if "检查部署健康状态" in message:
-            return "installing"
-        return "installing"
-
-    def reporter(
-        _: dict[str, Any],
-        pending_confirmation: dict[str, Any] | None,
-        active_node_path: str,
-        active_node_message: str,
-    ) -> None:
-        message = str(active_node_message or "").strip()
-        node_path = str(active_node_path or "").strip()
-        if isinstance(pending_confirmation, dict):
-            pending_message = str(pending_confirmation.get("message") or "").strip()
-            if pending_message and pending_message != state["last_message"]:
-                ctx.log(f"Workflow 等待确认: {pending_message}")
-                state["last_message"] = pending_message
-            return
-        if not message:
-            return
-        if node_path == state["last_path"] and message == state["last_message"]:
-            return
-        state["last_path"] = node_path
-        state["last_message"] = message
-        ctx.log(f"Workflow 执行中: {message}")
-        total_bytes = len((tool_context or {}).get("file_bytes") or b"")
-        upload_progress_manager.update(
-            upload_token,
-            transferred_bytes=total_bytes if resolve_phase(message) == "installing" else None,
-            total_bytes=total_bytes,
-            phase=resolve_phase(message),
-            message=message,
-            done=False,
-            owner_id="",
-        )
-
-    return reporter
+    return build_workflow_status_reporter(
+        ctx,
+        upload_token=upload_token,
+        tool_context=tool_context,
+        total_bytes_getter=lambda active_tool_context: len((active_tool_context or {}).get("file_bytes") or b""),
+        progress_transformer=progress_transformer,
+        log_pending_confirmation=True,
+    )
 
 
 def _build_install_output_callback(
@@ -155,22 +85,16 @@ def _build_install_output_callback(
     return callback
 
 
-def create_deploy_runner(
+def create_package_workflow_task_runner(
     session: dict[str, Any],
     *,
     remote_dir: str,
     machine_type: str,
     device_type: str,
-    install_template: str,
-    start_command: str,
-    health_command: str,
     rollback_template: str,
-    auto_rollback: bool,
     file_name: str,
     source_metadata: dict[str, Any] | None = None,
     cleanup_existing_remote_files: bool = True,
-    probe_command_template: str = "",
-    fallback_machine_options: list[dict[str, str]] | None = None,
     upload_token: str = "",
     owner_id: str = "",
 ):
@@ -192,8 +116,6 @@ def create_deploy_runner(
             "temp_remote_path": remote_path,
             "removed_files": [],
             "install_command": "",
-            "start_command": start_command,
-            "health_command": health_command,
             "rollback_command": "",
             "machine_type": machine_type,
             "device_type": str(target.get("device_type") or device_type),
@@ -211,8 +133,6 @@ def create_deploy_runner(
             "remote_deb_path": remote_path,
             "target_path": remote_path,
             "install_command": "",
-            "start_command": start_command,
-            "health_command": health_command,
             "rollback_command": "",
             "machine_type": machine_type,
             "device_type": str(target.get("device_type") or device_type),
@@ -225,7 +145,7 @@ def create_deploy_runner(
         try:
             ctx.log(f"目标远端安装包路径: {remote_path}")
 
-            from ...playbooks import run_scripted_playbook_by_id
+            from ....playbooks import run_scripted_playbook_by_id
 
             workflow_context = {
                 "session": session,
@@ -237,10 +157,6 @@ def create_deploy_runner(
                 "cleanup_existing_remote_files": cleanup_existing_remote_files,
                 "upload_token": upload_token,
                 "source_metadata": resolved_source_metadata,
-                "install_template": install_template,
-                "probe_command_template": probe_command_template,
-                "fallback_machine_options": list(fallback_machine_options or []),
-                "health_command": health_command,
             }
             workflow_context["install_output_callback"] = _build_install_output_callback(
                 ctx,
@@ -283,6 +199,17 @@ def create_deploy_runner(
             if not isinstance(playbook_result, dict):
                 raise TaskFailure("未找到 normal workflow: package-deploy", {"summary": summary, "history": history})
             if isinstance(playbook_result.get("pending_confirmation"), dict):
+                probe_step = find_playbook_step(playbook_result, "probe_package_machine_types") or {}
+                probe_payload = probe_step.get("raw_result") if isinstance(probe_step.get("raw_result"), dict) else {}
+                if probe_payload:
+                    summary["probe_command"] = str(probe_payload.get("command") or "").strip()
+                    summary["machine_options"] = probe_payload.get("machine_options") or []
+                    inferred_machine_type = str(probe_payload.get("inferred_machine_type") or "").strip()
+                    if inferred_machine_type:
+                        summary["inferred_machine_type"] = inferred_machine_type
+                        summary["machine_type"] = inferred_machine_type
+                    if str(probe_payload.get("warning") or "").strip():
+                        warnings.append(str(probe_payload.get("warning") or "").strip())
                 summary["workflow_result"] = playbook_result
                 return {
                     "summary": summary,
@@ -291,9 +218,9 @@ def create_deploy_runner(
                     "resume_state": playbook_result.get("resume_state"),
                 }
 
-            _log_playbook_steps(ctx, playbook_result)
+            log_playbook_steps(ctx, playbook_result)
 
-            stage_step = _find_playbook_step(playbook_result, "package_stage_remote") or {}
+            stage_step = find_playbook_step(playbook_result, "stage_package_to_remote_target") or {}
             stage_payload = stage_step.get("raw_result") if isinstance(stage_step.get("raw_result"), dict) else {}
             if stage_payload:
                 summary["removed_files"] = stage_payload.get("removed_files") or []
@@ -312,7 +239,7 @@ def create_deploy_runner(
                 if not bool(stage_payload.get("upload_skipped")):
                     ctx.log("安装包上传完成")
 
-            install_step = _find_playbook_step(playbook_result, "package_install") or {}
+            install_step = find_playbook_step(playbook_result, "install_package_on_selected_robot_type") or {}
             install_payload = install_step.get("raw_result") if isinstance(install_step.get("raw_result"), dict) else {}
             install_result = install_payload.get("result") if isinstance(install_payload.get("result"), dict) else {}
             install_command = str(install_payload.get("command") or "").strip()
@@ -344,7 +271,7 @@ def create_deploy_runner(
                 summary["supports_target_credentials"] = bool(install_payload.get("supports_target_credentials"))
                 history["supports_target_credentials"] = bool(install_payload.get("supports_target_credentials"))
 
-            probe_step = _find_playbook_step(playbook_result, "package_probe_machine_types") or {}
+            probe_step = find_playbook_step(playbook_result, "probe_package_machine_types") or {}
             probe_payload = probe_step.get("raw_result") if isinstance(probe_step.get("raw_result"), dict) else {}
             if probe_payload:
                 summary["probe_command"] = str(probe_payload.get("command") or "").strip()
@@ -352,13 +279,6 @@ def create_deploy_runner(
                 if str(probe_payload.get("warning") or "").strip():
                     warnings.append(str(probe_payload.get("warning") or "").strip())
                     ctx.log(f"告警: {str(probe_payload.get('warning') or '').strip()}")
-
-            health_step = _find_playbook_step(playbook_result, "remote_execute_readonly") or {}
-            health_payload = health_step.get("raw_result") if isinstance(health_step.get("raw_result"), dict) else {}
-            health_result = health_payload.get("result") if isinstance(health_payload.get("result"), dict) else {}
-            if health_result:
-                summary["health_result"] = health_result
-                log_command_result(ctx, "健康检查", health_result)
 
             if rollback_template:
                 resolved_rollback_command = render_remote_command(
@@ -392,3 +312,7 @@ def create_deploy_runner(
                 client.close()
 
     return title, {"remote_deb_path": preview_remote_path, "file_name": file_name, "upload_token": upload_token}, runner
+
+
+create_package_deploy_task_runner = create_package_workflow_task_runner
+create_deploy_runner = create_package_workflow_task_runner

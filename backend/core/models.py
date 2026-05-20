@@ -60,11 +60,7 @@ class RosServiceCallPayload(BaseModel):
     request: str = ""
 
 
-class ChatRequestPayload(BaseModel):
-    message: str
-
-
-class AgentToolCallPayload(BaseModel):
+class ToolCallPayload(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 

@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import shlex
-import time
 from typing import Any
 
 from ...core.config import MODULE_DEPLOY_NAMES, MODULE_DEPLOY_PROJECT_ROOT
 from ...core.models import ApiError
-from ...common import get_fault_logger, short_error
+from ...common import get_runtime_logger, short_error
 from ..common import build_command_output_text
 
-logger = get_fault_logger()
+logger = get_runtime_logger()
+
+
+def _build_module_compose_env_prefix(compose_profiles: str) -> str:
+    normalized_profiles = str(compose_profiles or "").strip()
+    if not normalized_profiles:
+        return ""
+    ros_master_uri = "http://192.168.217.100:11311" if normalized_profiles == "rx" else "http://192.168.217.1:11311"
+    return (
+        f"export COMPOSE_PROFILES={shlex.quote(normalized_profiles)}; "
+        "export DISPLAY=${DISPLAY:-127.0.0.1:99.0}; "
+        "export ROBOT_MODEL=$COMPOSE_PROFILES; "
+        f"export ROS_MASTER_URI={shlex.quote(ros_master_uri)}; "
+        "export ROS_IP=192.168.217.100; "
+        "echo ROS_MASTER_URI=$ROS_MASTER_URI; "
+        "echo ROS_IP=$ROS_IP; "
+        "echo COMPOSE_PROFILES=$COMPOSE_PROFILES; "
+    )
 
 
 def resolve_module_project_root(client, module_name: str) -> tuple[Any, str, str]:
@@ -53,13 +69,16 @@ def execute_compose_service_command(
 
 def docker_compose_down_module(client, module_name: str) -> dict[str, Any]:
     client, normalized_module_name, project_root = resolve_module_project_root(client, module_name)
-    command = f"cd {shlex.quote(project_root)} && docker compose down {shlex.quote(normalized_module_name)}"
-    result = client.exec_interactive_command(command, timeout=20.0)
+    compose_profiles = client.get_interactive_env("COMPOSE_PROFILES")
+    env_prefix = _build_module_compose_env_prefix(compose_profiles)
+    command = f"bash -lc {shlex.quote(env_prefix + f'cd {project_root} && docker compose down {normalized_module_name}')}"
+    result = client.exec_noninteractive_command(command, timeout=20.0)
     if int(result.get("exit_code") or 0) != 0:
         raise ApiError(f"停止模块服务失败: {short_error(result)}")
     return {
         "module_name": normalized_module_name,
         "project_root": project_root,
+        "compose_profiles": compose_profiles,
         "command": command,
         "result": result,
         "output": build_command_output_text(result),
@@ -68,21 +87,19 @@ def docker_compose_down_module(client, module_name: str) -> dict[str, Any]:
 
 def docker_compose_up_module(client, module_name: str, *, wait_seconds: int = 0) -> dict[str, Any]:
     client, normalized_module_name, project_root = resolve_module_project_root(client, module_name)
-    wait_seconds = max(int(wait_seconds or 0), 0)
-    command = f"cd {shlex.quote(project_root)} && docker compose up -d {shlex.quote(normalized_module_name)}"
-    result = client.exec_interactive_command(command, timeout=20.0)
+    compose_profiles = client.get_interactive_env("COMPOSE_PROFILES")
+    env_prefix = _build_module_compose_env_prefix(compose_profiles)
+    command = f"bash -lc {shlex.quote(env_prefix + f'cd {project_root} && docker compose up -d {normalized_module_name}')}"
+    result = client.exec_noninteractive_command(command, timeout=20.0)
     if int(result.get("exit_code") or 0) != 0:
         raise ApiError(f"启动模块服务失败: {short_error(result)}")
-    if wait_seconds:
-        logger.info("docker_compose_up_module 等待容器稳定 | module=%s | seconds=%d", normalized_module_name, wait_seconds)
-        time.sleep(wait_seconds)
     return {
         "module_name": normalized_module_name,
         "project_root": project_root,
+        "compose_profiles": compose_profiles,
         "command": command,
         "result": result,
         "output": build_command_output_text(result),
-        "wait_seconds": wait_seconds,
     }
 
 

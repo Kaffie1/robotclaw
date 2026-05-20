@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..core.config import CHAT_SESSION_DIR, MAX_CONNECTION_CACHE_ITEMS, MAX_TASK_ITEMS
+from ..core.config import MAX_CONNECTION_CACHE_ITEMS, MAX_TASK_ITEMS
 from ..core.models import TaskFailure
 from .robot import RobotClient
 from ..shared.runtime import now_text
@@ -571,6 +571,8 @@ class TaskManager:
             task["progress"] = {
                 "phase": str(progress.get("phase") or "").strip(),
                 "message": str(progress.get("message") or "").strip(),
+                "step_name": str(progress.get("step_name") or "").strip(),
+                "step_label": str(progress.get("step_label") or "").strip(),
                 "percent": float(progress.get("percent") or 0),
                 "transferred_bytes": int(progress.get("transferred_bytes") or 0),
                 "total_bytes": int(progress.get("total_bytes") or 0),
@@ -645,35 +647,11 @@ class SessionStore:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
 
-    def _build_chat_history_path(self, sid: str) -> Path:
-        normalized_sid = str(sid or "").strip()
-        if not normalized_sid:
-            normalized_sid = "anonymous"
-        return CHAT_SESSION_DIR / f"{normalized_sid}.json"
-
-    def _initialize_chat_history_file(self, sid: str) -> Path:
-        path = self._build_chat_history_path(sid)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            path.write_text("[]\n", encoding="utf-8")
-        return path
-
-    def _delete_chat_history_file(self, session: dict[str, Any]) -> None:
-        raw_path = str(session.get("chat_history_path") or "").strip()
-        path = Path(raw_path) if raw_path else self._build_chat_history_path(str(session.get("session_id") or ""))
-        try:
-            if path.exists():
-                path.unlink()
-        except OSError:
-            pass
-
-    def _release_session_resources(self, session: dict[str, Any], *, remove_history_file: bool = True) -> None:
+    def _release_session_resources(self, session: dict[str, Any]) -> None:
         client = session.get("client")
         if isinstance(client, RobotClient):
             client.close()
         session["chat_state"] = {}
-        if remove_history_file:
-            self._delete_chat_history_file(session)
 
     def get_or_create(self, sid: str | None) -> tuple[str, dict[str, Any], bool]:
         with self.lock:
@@ -681,11 +659,9 @@ class SessionStore:
                 self.sessions[sid]["last_seen_ts"] = time.time()
                 return sid, self.sessions[sid], False
             new_sid = secrets.token_hex(16)
-            chat_history_path = self._initialize_chat_history_file(new_sid)
             self.sessions[new_sid] = {
                 "session_id": new_sid,
                 "client": RobotClient(),
-                "chat_history_path": str(chat_history_path),
                 "last_seen_ts": time.time(),
                 "path_cache": [],
                 "last_remote_deb_path": "",
@@ -756,7 +732,18 @@ class UploadProgressManager:
     def set_update_callback(self, callback) -> None:
         self.update_callback = callback
 
-    def start(self, token: str, *, file_name: str = "", total_bytes: int = 0, phase: str = "pending", message: str = "", owner_id: str = "") -> None:
+    def start(
+        self,
+        token: str,
+        *,
+        file_name: str = "",
+        total_bytes: int = 0,
+        phase: str = "pending",
+        message: str = "",
+        owner_id: str = "",
+        step_name: str = "",
+        step_label: str = "",
+    ) -> None:
         """使用一个唯一的 token 来标识上传任务，并初始化其进度信息。"""
         if not token:
             return
@@ -767,6 +754,8 @@ class UploadProgressManager:
                 "file_name": file_name,
                 "phase": phase,
                 "message": message,
+                "step_name": step_name,
+                "step_label": step_label,
                 "total_bytes": total_bytes,
                 "transferred_bytes": 0,
                 "percent": 0,
@@ -778,7 +767,20 @@ class UploadProgressManager:
         if callable(self.update_callback):
             self.update_callback(token, snapshot)
 
-    def update(self, token: str, *, transferred_bytes: int | None = None, total_bytes: int | None = None, phase: str | None = None, message: str | None = None, done: bool | None = None, error: str | None = None, owner_id: str = "") -> None:
+    def update(
+        self,
+        token: str,
+        *,
+        transferred_bytes: int | None = None,
+        total_bytes: int | None = None,
+        phase: str | None = None,
+        message: str | None = None,
+        done: bool | None = None,
+        error: str | None = None,
+        owner_id: str = "",
+        step_name: str | None = None,
+        step_label: str | None = None,
+    ) -> None:
         if not token:
             return
         with self.lock:
@@ -794,6 +796,10 @@ class UploadProgressManager:
                 item["phase"] = phase
             if message is not None:
                 item["message"] = message
+            if step_name is not None:
+                item["step_name"] = step_name
+            if step_label is not None:
+                item["step_label"] = step_label
             if done is not None:
                 item["done"] = done
             if error is not None:

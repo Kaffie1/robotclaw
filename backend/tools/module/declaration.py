@@ -58,7 +58,7 @@ class ModuleHealthCheckArgs(BaseModel):
 def handle_module_prepare_packages(args: ModulePreparePackagesArgs, runtime: ToolRuntime) -> dict[str, Any]:
     package_sources = (runtime.tool_context or {}).get("package_sources")
     if not isinstance(package_sources, list) or not package_sources:
-        raise ApiError("模块部署 workflow 缺少安装包来源列表")
+        raise ApiError("模块部署上下文缺少安装包来源列表")
     upload_token = str((runtime.tool_context or {}).get("upload_token") or "").strip()
     result = module_prepare_packages(package_sources, upload_token=upload_token)
     if isinstance(runtime.tool_context, dict):
@@ -85,7 +85,7 @@ def handle_module_replace_remote_assets(args: ModuleReplaceRemoteAssetsArgs, run
 def handle_module_stage_packages(args: ModuleStagePackagesArgs, runtime: ToolRuntime) -> dict[str, Any]:
     package_files = (runtime.tool_context or {}).get("package_files")
     if not isinstance(package_files, list) or not package_files:
-        raise ApiError("模块部署 workflow 缺少已准备的安装包列表")
+        raise ApiError("模块部署上下文缺少已准备的安装包列表")
     upload_token = str((runtime.tool_context or {}).get("upload_token") or "").strip()
     result = module_stage_packages(
         runtime.client,
@@ -105,7 +105,7 @@ def handle_module_stage_packages(args: ModuleStagePackagesArgs, runtime: ToolRun
 def handle_module_install(args: ModuleInstallArgs, runtime: ToolRuntime) -> dict[str, Any]:
     uploaded_file_paths = (runtime.tool_context or {}).get("uploaded_file_paths")
     if not isinstance(uploaded_file_paths, list):
-        raise ApiError("模块部署 workflow 缺少上传结果")
+        raise ApiError("模块部署上下文缺少上传结果")
     result = module_install(
         runtime.client,
         module_name=args.module_name,

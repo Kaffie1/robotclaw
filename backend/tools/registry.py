@@ -8,7 +8,7 @@ from typing import Any, Callable
 from pydantic import BaseModel
 
 from ..core.models import ApiError
-from ..common import get_fault_logger, get_fault_trace_logger
+from ..common import get_runtime_logger, get_runtime_trace_logger
 from .base import ToolDefinition
 from .docker import (
     DockerComposeExecArgs,
@@ -33,15 +33,13 @@ from .module import (
 )
 
 from .package import (
-    PackageInstallArgs,
-    PackagePrepareSourceArgs,
-    PackageProbeMachineTypesArgs,
-    PackageStageRemoteArgs,
-    handle_package_install,
-    handle_package_prepare_source,
+    PrepareArtifactSourcesArgs,
+    RemoteExecuteWithFallbackArgs,
+    RemoteStageArtifactsArgs,
     handle_package_probe_credentials,
-    handle_package_probe_machine_types,
-    handle_package_stage_remote,
+    handle_prepare_artifact_sources,
+    handle_remote_execute_with_fallback,
+    handle_remote_stage_artifacts,
 )
 
 from .remote import (
@@ -88,8 +86,8 @@ from .ros import (
     handle_ros_topic_type,
 )
 
-logger = get_fault_logger()
-trace_logger = get_fault_trace_logger()
+logger = get_runtime_logger()
+trace_logger = get_runtime_trace_logger()
 
 
 def _truncate_trace_value(value: Any, *, depth: int = 0) -> Any:
@@ -415,31 +413,24 @@ def _build_package_tool_definitions() -> list[ToolDefinition]:
             module="package",
         ),
         ToolDefinition(
-            name="package_prepare_source",
-            description="准备整包部署安装包来源，解析本地临时文件或从文件服务器下载到本机。",
-            args_schema=PackagePrepareSourceArgs,
-            handler=handle_package_prepare_source,
+            name="prepare_artifact_sources",
+            description="通用地准备一个或多个安装包来源，支持本地上传和文件服务器路径。",
+            args_schema=PrepareArtifactSourcesArgs,
+            handler=handle_prepare_artifact_sources,
             module="package",
         ),
         ToolDefinition(
-            name="package_install",
-            description="执行整包安装命令，并根据部署包能力自动处理目标用户名和密码参数。",
-            args_schema=PackageInstallArgs,
-            handler=handle_package_install,
+            name="remote_execute_with_fallback",
+            description="执行通用远端命令，并按 workflow 参数决定输出解析方式和失败回退策略。",
+            args_schema=RemoteExecuteWithFallbackArgs,
+            handler=handle_remote_execute_with_fallback,
             module="package",
         ),
         ToolDefinition(
-            name="package_probe_machine_types",
-            description="执行整包安装包的机型探测命令，并返回可选机型列表，失败时回退到默认机型列表。",
-            args_schema=PackageProbeMachineTypesArgs,
-            handler=handle_package_probe_machine_types,
-            module="package",
-        ),
-        ToolDefinition(
-            name="package_stage_remote",
-            description="在目标处理器上复用或上传整包安装包，并按需清理旧包。",
-            args_schema=PackageStageRemoteArgs,
-            handler=handle_package_stage_remote,
+            name="remote_stage_artifacts",
+            description="按精确路径或目录模式上传一个或多个安装包，并按需清理旧包。",
+            args_schema=RemoteStageArtifactsArgs,
+            handler=handle_remote_stage_artifacts,
             module="package",
         ),
     ]

@@ -1,11 +1,9 @@
 from .declaration import (
-    PackageInstallArgs,
-    PackagePrepareSourceArgs,
-    PackageProbeMachineTypesArgs,
-    PackageStageRemoteArgs,
-    handle_package_install,
-    handle_package_prepare_source,
+    PrepareArtifactSourcesArgs,
+    RemoteExecuteWithFallbackArgs,
+    RemoteStageArtifactsArgs,
     handle_package_probe_credentials,
-    handle_package_probe_machine_types,
-    handle_package_stage_remote,
+    handle_prepare_artifact_sources,
+    handle_remote_execute_with_fallback,
+    handle_remote_stage_artifacts,
 )

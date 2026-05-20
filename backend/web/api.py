@@ -1,4 +1,3 @@
-import asyncio
 import json
 import io
 import os
@@ -18,15 +17,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..tools import tool_registry
-from ..agent import run_fault_chat_graph
-from ..agent.playbook_state import (
-    build_matched_playbook_payload_by_id,
-    clear_live_playbook_state,
-    get_live_playbook_state,
-    reset_live_playbook_execution,
-    stream_live_playbook_events,
-)
-from ..agent.graph_nodes import load_catalog_node, resolve_playbook_route
 from ..core.config import (
     DEPLOY_CONFIG_PATH,
     MAX_TASK_ITEMS,
@@ -37,20 +27,16 @@ from ..core.config import (
     STATIC_DIR,
 )
 from ..common import (
-    append_chat_history_turn,
-    delete_chat_history_file,
     get_asset_version,
-    get_chat_history,
     parse_bool,
     prepare_package_bytes,
     prepare_package_source,
     render_remote_command,
     require_text,
     require_upload,
-    reset_chat_state,
     resolve_download_source_path,
 )
-from ..core.models import AgentToolCallPayload, ApiError, ChatRequestPayload, ConnectPayload, ConnectionConfig, ExecutePayload, InstallDebPayload, RosServiceCallPayload, RosTopicPublishPayload
+from ..core.models import ApiError, ConnectPayload, ConnectionConfig, ExecutePayload, InstallDebPayload, RosServiceCallPayload, RosTopicPublishPayload, ToolCallPayload
 from ..shared.runtime import connection_cache_store, deploy_config_store, history_store, session_store, task_manager, templates, upload_progress_manager
 from ..tools.ros import (
     ros_list_services,
@@ -65,10 +51,10 @@ from ..tools.ros import (
     ros_topic_publish,
     ros_topic_type,
 )
-from ..operations.deploy import (
+from ..operations.workflow import (
     create_package_target_client,
-    create_deploy_runner,
-    create_module_deploy_runner,
+    create_package_workflow_task_runner,
+    create_module_workflow_task_runner,
     resolve_deploy_target,
 )
 from ..operations.services import (
@@ -78,6 +64,8 @@ from ..operations.services import (
     ensure_client_connected,
     refresh_remote_shortcuts,
 )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """定期清理过期会话数据的生命周期管理器"""
@@ -291,9 +279,6 @@ def create_app() -> FastAPI:
         session["client"].close()
         session["remote_shortcuts"] = []
         session["preferred_root"] = "/"
-        tool_context = {"session_id": get_session_id(request)}
-        reset_chat_state(tool_context)
-        delete_chat_history_file(tool_context)
         session["ssh_auth"] = {"username": str(session["last_config"].get("username") or ""), "password": ""}
         session["processor_auth"] = {
             "ORIN": {
@@ -310,155 +295,6 @@ def create_app() -> FastAPI:
             },
         }
         return {"ok": True, "message": "已断开连接"}
-
-    @app.post("/api/chat")
-    async def api_chat(request: Request):
-        session = get_session(request)
-        session_id = get_session_id(request)
-        body = await request.json()
-        message = str(body.get("message") or "").strip()
-        continuation = body.get("continuation")
-        history = body.get("history")
-        route_selection = body.get("route_selection")
-        if continuation is not None and not isinstance(continuation, dict):
-            return JSONResponse(content={"ok": False, "error": "continuation 必须是对象"}, status_code=400)
-        if history is not None and not isinstance(history, list):
-            return JSONResponse(content={"ok": False, "error": "history 必须是数组"}, status_code=400)
-        if route_selection is not None and not isinstance(route_selection, dict):
-            return JSONResponse(content={"ok": False, "error": "route_selection 必须是对象"}, status_code=400)
-        if continuation is None and not message:
-            return JSONResponse(content={"ok": False, "error": "消息内容不能为空"}, status_code=400)
-        if isinstance(continuation, dict):
-            user_message = str(continuation.get("user_message") or "").strip()
-            if not user_message:
-                return JSONResponse(content={"ok": False, "error": "continuation 缺少 user_message"}, status_code=400)
-            tool_context: dict[str, Any] = {"session_id": session_id, **dict(continuation.get("tool_context") or {})}
-        else:
-            user_message = message
-            tool_context = {"session_id": session_id}
-        last_config = session.get("last_config") or {}
-        route_selection_payload = build_matched_playbook_payload_by_id(str((route_selection or {}).get("playbook_id") or "").strip())
-        continuation_kind = str((continuation or {}).get("kind") or "").strip() if isinstance(continuation, dict) else ""
-        if not isinstance(continuation, dict):
-            if route_selection_payload:
-                reset_live_playbook_execution(session_id=session_id, playbook=route_selection_payload)
-            else:
-                clear_live_playbook_state(session_id=session_id)
-        result = await asyncio.to_thread(
-            run_fault_chat_graph,
-            user_message,
-            runtime_context={
-                "connected": bool(session["client"].connected),
-                "host": str(last_config.get("host") or ""),
-                "port": str(last_config.get("port") or ""),
-                "username": str(last_config.get("username") or ""),
-                "preferred_root": str(session.get("preferred_root") or "/"),
-                "recent_tasks": task_manager.list_tasks_for_owner(session_id, MAX_TASK_ITEMS),
-            },
-            tool_context=tool_context,
-            conversation_history=[
-                {
-                    "role": str(item.get("role") or "").strip(),
-                    "content": str(item.get("content") or "").strip(),
-                }
-                for item in (history or [])
-                if isinstance(item, dict)
-            ],
-            resume_continuation=continuation if isinstance(continuation, dict) else None,
-            confirmation_response=message if continuation_kind == "playbook_confirmation" else "",
-            prefetched_playbook_id=str((route_selection or {}).get("playbook_id") or "").strip(),
-            prefetched_playbook_title=str((route_selection or {}).get("playbook_title") or "").strip(),
-            prefetched_reason=str((route_selection or {}).get("reason") or "").strip(),
-        )
-        append_chat_history_turn(
-            tool_context,
-            user_message=user_message,
-            assistant_message=str(result.get("message") or ""),
-        )
-        return {"ok": True, **result}
-
-    @app.post("/api/chat/reset")
-    def api_chat_reset(request: Request):
-        session_id = get_session_id(request)
-        reset_chat_state({"session_id": session_id})
-        clear_live_playbook_state(session_id=session_id)
-        return {"ok": True, "message": "聊天上下文已清空"}
-
-    @app.get("/api/chat/history")
-    def api_chat_history(request: Request):
-        return {"ok": True, "history": get_chat_history({"session_id": get_session_id(request)})}
-
-    @app.post("/api/chat/route")
-    async def api_chat_route(request: Request):
-        session_id = get_session_id(request)
-        body = await request.json()
-        message = str(body.get("message") or "").strip()
-        continuation = body.get("continuation")
-        if continuation is not None and not isinstance(continuation, dict):
-            return JSONResponse(content={"ok": False, "error": "continuation 必须是对象"}, status_code=400)
-        if not continuation and not message:
-            return JSONResponse(content={"ok": False, "error": "消息内容不能为空"}, status_code=400)
-        route_state = {
-            **load_catalog_node({}),
-            "session_id": session_id,
-            "user_message": message,
-            "resume_continuation": continuation if isinstance(continuation, dict) else None,
-        }
-        route_result = await asyncio.to_thread(resolve_playbook_route, route_state, publish=True)
-        playbook_id = str(route_result.get("selected_playbook_id") or "").strip()
-        playbook_title = str(route_result.get("selected_playbook_title") or "").strip()
-        reason = str(route_result.get("reason") or "").strip()
-        playbook_payload = build_matched_playbook_payload_by_id(playbook_id)
-        return {
-            "ok": True,
-            "route_selection": {
-                "playbook_id": playbook_id,
-                "playbook_title": playbook_title,
-                "reason": reason,
-            },
-            "playbook": playbook_payload,
-        }
-
-    @app.get("/api/chat/state")
-    async def api_chat_state(request: Request):
-        session_id = get_session_id(request)
-        raw_since_version = request.query_params.get("since_version", "0")
-        try:
-            since_version = max(int(raw_since_version), 0)
-        except ValueError:
-            since_version = 0
-        return {"ok": True, **get_live_playbook_state(session_id=session_id, since_version=since_version)}
-
-    @app.get("/api/chat/events")
-    async def api_chat_events(request: Request):
-        session_id = get_session_id(request)
-        raw_since_version = request.query_params.get("since_version", "0")
-        try:
-            since_version = max(int(raw_since_version), 0)
-        except ValueError:
-            since_version = 0
-        return StreamingResponse(
-            stream_live_playbook_events(session_id=session_id, since_version=since_version),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-
-    @app.get("/api/agent/tools")
-    def api_agent_tools():
-        return {"ok": True, "items": tool_registry.list_definitions()}
-
-    @app.post("/api/agent/tool-call")
-    def api_agent_tool_call(payload: AgentToolCallPayload, request: Request):
-        result = tool_registry.call_tool(
-            payload.name,
-            payload.arguments,
-            {"session_id": get_session_id(request)},
-        )
-        return {"ok": True, "result": result}
 
     @app.get("/api/connection-cache")
     def api_connection_cache():
@@ -583,18 +419,12 @@ def create_app() -> FastAPI:
             )
             resolved_remote_dir, selected_file_name, remote_path = resolve_deploy_target(client, selected_file_name)
             deploy_profile = deploy_config_store.get_profile("package", machine_type, auto_select_default=bool(str(machine_type or "").strip()))
-            title, metadata, runner = create_deploy_runner(
+            title, metadata, runner = create_package_workflow_task_runner(
                 session,
                 remote_dir=resolved_remote_dir,
                 machine_type=str(deploy_profile.get("machine_type") or ""),
                 device_type=str(target.get("device_type") or device_type).upper(),
-                probe_command_template=str(deploy_profile.get("probe_command_template") or ""),
-                fallback_machine_options=deploy_config_store.get_machine_options("package"),
-                install_template=deploy_profile["install_template"],
-                start_command=deploy_profile["start_command"],
-                health_command=deploy_profile["health_command"],
                 rollback_template=deploy_profile["rollback_template"],
-                auto_rollback=bool(deploy_profile["auto_rollback"]),
                 file_name=selected_file_name,
                 source_metadata=source_metadata,
                 cleanup_existing_remote_files=True,
@@ -679,19 +509,14 @@ def create_app() -> FastAPI:
                 }
             )
         deploy_profile = deploy_config_store.get_profile("module", selected_module_name)
-        title, metadata, runner = create_module_deploy_runner(
+        title, metadata, runner = create_module_workflow_task_runner(
             session,
             module_name=selected_module_name,
             module_path=selected_module_path,
             package_sources=package_sources,
             auto_deploy_version=str(auto_module_version or "").strip(),
             upload_token=str(upload_token or "").strip(),
-            install_template=deploy_profile["install_template"],
             up_wait_seconds=int(deploy_profile.get("up_wait_seconds") or 0),
-            start_command=deploy_profile["start_command"],
-            health_command=deploy_profile["health_command"],
-            rollback_template=deploy_profile["rollback_template"],
-            auto_rollback=bool(deploy_profile["auto_rollback"]),
             auto_deploy=auto_deploy_flag,
             owner_id=session_id,
         )
@@ -880,7 +705,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "items": tool_registry.list_definitions()}
 
     @app.post("/api/tools/call")
-    def api_tool_call(payload: AgentToolCallPayload, request: Request):
+    def api_tool_call(payload: ToolCallPayload, request: Request):
         result = tool_registry.call_tool(
             payload.name,
             payload.arguments,

@@ -5,6 +5,10 @@ playbooks:
   - id: module-deploy
     type: normal
     title: 模块部署
+    task_progress:
+      default_phase: preparing
+      success_phase: completed
+      failure_phase: failed
     root:
       type: sequence
       name: deploy_module
@@ -13,12 +17,22 @@ playbooks:
         - type: action
           name: prepare_module_packages
           display_name: 准备模块安装包来源
-          tool_name: module_prepare_packages
-          arguments: {}
+          progress:
+            phase: preparing
+            message: 正在准备模块安装包来源
+          tool_name: prepare_artifact_sources
+          arguments:
+            source_items:
+              from_context: package_sources
+            upload_token:
+              from_context: upload_token
           failure_message: 模块安装包来源准备失败，请检查本地上传文件或文件服务器路径
         - type: action
           name: replace_remote_module_assets
           display_name: 替换自动部署模块资源
+          progress:
+            phase: preparing
+            message: 正在替换自动部署模块资源
           tool_name: module_replace_remote_assets
           arguments:
             module_name:
@@ -32,64 +46,51 @@ playbooks:
         - type: action
           name: stage_module_packages
           display_name: 上传模块安装包
-          tool_name: module_stage_packages
+          progress:
+            phase: uploading_to_robot
+            message: 正在上传模块安装包
+          tool_name: remote_stage_artifacts
           arguments:
-            module_name:
-              from_context: module_name
-            module_path:
+            target_root:
               from_context: module_path
+            target_mode: directory
+            artifact_items:
+              from_context: package_files
             auto_deploy:
               from_context: auto_deploy
+            upload_token:
+              from_context: upload_token
           assert_ref: rule_2
           failure_message: 模块安装包上传失败，请检查旧包清理与机器人目录权限
         - type: action
-          name: install_module
-          display_name: 执行模块安装
-          tool_name: module_install
+          name: docker_compose_down_module
+          display_name: 停止模块容器
+          progress:
+            phase: installing
+            message: 正在停止模块容器
+          tool_name: docker_compose_down_module
           arguments:
             module_name:
               from_context: module_name
-            module_path:
-              from_context: module_path
-            install_template:
-              from_context: install_template
           assert_ref: rule_3
-          failure_message: 模块安装命令执行失败，请检查模块安装脚本输出
+          failure_message: 停止模块容器失败，请检查 docker compose down 输出
         - type: action
-          name: start_module
-          display_name: 启动模块
-          tool_name: module_start
+          name: docker_compose_up_module
+          display_name: 启动模块容器
+          progress:
+            phase: installing
+            message: 正在启动模块容器
+          tool_name: docker_compose_up_module
+          wait_seconds:
+            from_context: up_wait_seconds
           arguments:
             module_name:
               from_context: module_name
-            module_path:
-              from_context: module_path
-            start_command:
-              from_context: start_command
-            up_wait_seconds:
-              from_context: up_wait_seconds
-          assert_ref: rule_1
-          failure_message: 模块启动命令执行失败，请检查启动脚本输出
-        - type: action
-          name: check_module_health
-          display_name: 检查模块健康状态
-          tool_name: module_health_check
-          arguments:
-            module_name:
-              from_context: module_name
-            module_path:
-              from_context: module_path
-            health_command:
-              from_context: health_command
-            rollback_template:
-              from_context: rollback_template
-            auto_rollback:
-              from_context: auto_rollback
-          assert_ref: rule_4
-          failure_message: 模块健康检查失败，请检查模块运行状态或回滚结果
+          assert_ref: rule_3
+          failure_message: 启动模块容器失败，请检查 docker compose up 输出
     execution_notes:
-      - "模块部署会先准备安装包来源，再按模块目录清理旧包并上传新包"
+      - "模块部署会先通过共享的来源准备节点处理本地上传或文件服务器输入"
+      - "模块安装包会通过共享的远端上传节点按模块目录清理旧包并上传新包"
       - "自动模块部署会先替换本地版本目录中的 config、containers 和 docker-compose 片段"
-      - "安装完成后会按配置等待并执行启动命令"
-      - "健康检查失败时，如启用了自动回滚，会优先尝试回滚"
-
+      - "上传完成后，会把 docker compose down 和 docker compose up 作为两个独立 workflow 步骤执行"
+      - "当前版本在 docker compose up 成功返回后直接结束，不再执行额外启动命令或健康检查"

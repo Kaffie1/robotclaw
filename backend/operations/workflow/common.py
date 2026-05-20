@@ -115,3 +115,107 @@ def resolve_deploy_target(client, file_name: str) -> tuple[str, str, str]:
         raise ApiError("文件名不能为空")
     remote_path = client.resolve_remote_path(posixpath.join(resolved_remote_dir, normalized_file_name))
     return resolved_remote_dir, normalized_file_name, remote_path
+
+
+def find_playbook_step(playbook_result: dict[str, Any], step_name: str) -> dict[str, Any] | None:
+    """按 workflow step.name 优先查找步骤，兼容旧数据回退到 tool_name。"""
+    normalized_step_name = str(step_name or "").strip()
+    if not normalized_step_name:
+        return None
+    for step in playbook_result.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("name") or "").strip() == normalized_step_name:
+            return step
+    for step in playbook_result.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("tool_name") or "").strip() == normalized_step_name:
+            return step
+    return None
+
+
+def resolve_playbook_progress(
+    execution_snapshot: dict[str, Any],
+    pending_confirmation: dict[str, Any] | None,
+    active_node_path: str,
+    active_node_message: str,
+) -> dict[str, str]:
+    """从 workflow 定义中解析当前任务进度，避免在 runner 里硬编码状态映射。"""
+    playbook = execution_snapshot.get("matched_context") if isinstance(execution_snapshot, dict) else {}
+    task_progress = playbook.get("task_progress") if isinstance(playbook, dict) and isinstance(playbook.get("task_progress"), dict) else {}
+    default_phase = str(task_progress.get("default_phase") or "preparing").strip() or "preparing"
+    progress = {
+        "phase": default_phase,
+        "message": str(active_node_message or "").strip(),
+        "step_name": "",
+        "step_label": "",
+    }
+
+    node_spec = _find_playbook_node_by_path(playbook, active_node_path)
+    if isinstance(node_spec, dict):
+        progress["step_name"] = str(node_spec.get("name") or node_spec.get("tool_name") or "").strip()
+        progress["step_label"] = str(
+            node_spec.get("display_name")
+            or node_spec.get("message")
+            or node_spec.get("name")
+            or node_spec.get("tool_name")
+            or ""
+        ).strip()
+        node_progress = node_spec.get("progress") if isinstance(node_spec.get("progress"), dict) else {}
+        if node_progress:
+            progress["phase"] = str(node_progress.get("phase") or progress["phase"]).strip() or progress["phase"]
+            progress["message"] = str(node_progress.get("message") or progress["message"]).strip() or progress["message"]
+
+    if isinstance(pending_confirmation, dict):
+        confirmation = pending_confirmation.get("confirmation") if isinstance(pending_confirmation.get("confirmation"), dict) else {}
+        confirmation_progress = confirmation.get("progress") if isinstance(confirmation.get("progress"), dict) else {}
+        progress["phase"] = str(
+            confirmation_progress.get("phase")
+            or task_progress.get("waiting_confirmation_phase")
+            or "waiting_confirmation"
+        ).strip() or "waiting_confirmation"
+        progress["message"] = str(
+            confirmation_progress.get("message")
+            or pending_confirmation.get("message")
+            or progress["message"]
+        ).strip()
+        progress["step_name"] = str(
+            pending_confirmation.get("node_name")
+            or progress["step_name"]
+        ).strip()
+        progress["step_label"] = str(
+            progress["step_label"]
+            or pending_confirmation.get("node_name")
+            or pending_confirmation.get("message")
+            or ""
+        ).strip()
+    return progress
+
+
+def _find_playbook_node_by_path(playbook: dict[str, Any], node_path: str) -> dict[str, Any] | None:
+    if not isinstance(playbook, dict):
+        return None
+    root = playbook.get("root")
+    if not isinstance(root, dict):
+        return None
+    normalized_path = str(node_path or "").strip()
+    if not normalized_path or normalized_path == "root":
+        return root
+    if not normalized_path.startswith("root"):
+        return None
+    current: dict[str, Any] | None = root
+    for match in re.finditer(r"\.children\[(\d+)\]", normalized_path):
+        if not isinstance(current, dict):
+            return None
+        children = current.get("children")
+        if not isinstance(children, list):
+            return None
+        index = int(match.group(1))
+        if index < 0 or index >= len(children):
+            return None
+        child = children[index]
+        if not isinstance(child, dict):
+            return None
+        current = child
+    return current
