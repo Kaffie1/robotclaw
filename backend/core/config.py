@@ -106,7 +106,6 @@ DEFAULT_DEPLOY_CONFIG = {
     },
     "module": {
         "probe_command_template": "",
-        "up_wait_seconds": 10,
         "install_template": (
             'bash -ic "export COMPOSE_PROFILES={compose_profiles}; '
             'export DISPLAY=\\${DISPLAY:-127.0.0.1:99.0}; '

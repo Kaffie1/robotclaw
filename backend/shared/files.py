@@ -201,6 +201,7 @@ def materialize_package_bytes_from_source(source_metadata: dict[str, Any], *, lo
             "download_path": remote_file,
             "local_tmp_path": str(local_file),
             "source_file_name": file_name,
+            "file_size": int(local_file.stat().st_size),
         }
         return file_name, local_file.read_bytes(), normalized_metadata
 
@@ -217,6 +218,6 @@ def materialize_package_bytes_from_source(source_metadata: dict[str, Any], *, lo
         "download_path": "",
         "local_tmp_path": local_tmp_path,
         "source_file_name": file_name,
+        "file_size": int(local_file.stat().st_size),
     }
-    # todo: 不要把大文件直接读到内存里，应该在后续处理流程中直接使用文件路径进行安装部署等操作
-    return file_name, local_file.read_bytes(), normalized_metadata
+    return file_name, b"", normalized_metadata

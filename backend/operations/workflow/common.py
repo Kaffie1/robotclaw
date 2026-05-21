@@ -137,17 +137,17 @@ def find_playbook_step(playbook_result: dict[str, Any], step_name: str) -> dict[
 
 def resolve_playbook_progress(
     execution_snapshot: dict[str, Any],
-    pending_confirmation: dict[str, Any] | None,
-    active_node_path: str,
-    active_node_message: str,
 ) -> dict[str, str]:
     """从 workflow 定义中解析当前任务进度，避免在 runner 里硬编码状态映射。"""
     playbook = execution_snapshot.get("matched_context") if isinstance(execution_snapshot, dict) else {}
     task_progress = playbook.get("task_progress") if isinstance(playbook, dict) and isinstance(playbook.get("task_progress"), dict) else {}
+    pending_confirmation = execution_snapshot.get("pending_confirmation") if isinstance(execution_snapshot, dict) else None
+    active_node_path = str((execution_snapshot or {}).get("active_node_path") or "").strip()
+    active_node_message = str((execution_snapshot or {}).get("active_node_message") or "").strip()
     default_phase = str(task_progress.get("default_phase") or "preparing").strip() or "preparing"
     progress = {
         "phase": default_phase,
-        "message": str(active_node_message or "").strip(),
+        "message": active_node_message,
         "step_name": "",
         "step_label": "",
     }

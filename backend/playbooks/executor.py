@@ -23,6 +23,7 @@ class PlaybookConfirmationRequired(Exception):
 
 
 def _make_json_safe(value: Any) -> Any:
+    """将值转换为 JSON 安全的格式，适用于日志记录和调试输出。"""
     if isinstance(value, (bytes, bytearray)):
         return {"type": "bytes", "size": len(value)}
     if isinstance(value, dict):
@@ -214,9 +215,8 @@ def execute_playbook(
     depth: int = 0,
     max_depth: int = 4,
     resume_state: dict[str, Any] | None = None,
-    status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
-    tree_status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
-    include_tree_state: bool = False,
+    status_reporter: Callable[[dict[str, Any]], None] | None = None,
+    tree_status_reporter: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     from .bt_executor import execute_tree_playbook
 
@@ -230,5 +230,4 @@ def execute_playbook(
         resume_state=resume_state,
         status_reporter=status_reporter,
         tree_status_reporter=tree_status_reporter,
-        include_tree_state=include_tree_state,
     )

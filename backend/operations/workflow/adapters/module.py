@@ -1,9 +1,9 @@
 import posixpath
 from typing import Any
 
-from ....core.models import TaskFailure
 from ....common import log_command_result
-from ...services import current_robot_password, ensure_client_connected, robot_identity
+from ....core.models import TaskFailure
+from ...services import ensure_client_connected, robot_identity
 from ....infra.stores import TaskContext
 from ....shared.confirmation import get_context_value, set_runtime_value
 from ..common import find_playbook_step
@@ -24,7 +24,7 @@ def _build_module_playbook_status_reporter(ctx: TaskContext, *, upload_token: st
         package_files = get_context_value(active_tool_context, "package_files")
         if not isinstance(package_files, list):
             return None
-        return sum(len(item.get("package_file_bytes") or b"") for item in package_files if isinstance(item, dict))
+        return sum(max(int(item.get("package_file_size") or 0), 0) for item in package_files if isinstance(item, dict))
 
     return build_workflow_status_reporter(
         ctx,
@@ -42,16 +42,12 @@ def create_module_workflow_task_runner(
     module_name: str,
     module_path: str,
     package_sources: list[dict[str, Any]],
-    auto_deploy_version: str = "",
     upload_token: str,
-    up_wait_seconds: int = 10,
     auto_deploy: bool = False,
     owner_id: str = "",
-    include_tree_state: bool = False,
 ):
     client = ensure_client_connected(session)
     identity = robot_identity(session)
-    sudo_password = current_robot_password(session)
     package_file_names = [
         str(item.get("package_file_name") or "").strip()
         for item in package_sources
@@ -65,7 +61,6 @@ def create_module_workflow_task_runner(
             "module_name": module_name,
             "module_path": module_path,
             "compose_profiles": "",
-            "up_wait_seconds": max(int(up_wait_seconds or 0), 0),
             "package_file_name": package_file_names[0] if package_file_names else "",
             "package_files": [],
             "removed_files": [],
@@ -74,7 +69,6 @@ def create_module_workflow_task_runner(
             "skipped_existing_files": [],
             "install_command": "",
             "rollback_command": "",
-            "auto_deploy_version": auto_deploy_version,
             "warnings": [],
         }
         history = {
@@ -106,9 +100,6 @@ def create_module_workflow_task_runner(
             "package_sources": package_sources,
             "upload_token": upload_token,
             "auto_deploy": bool(auto_deploy),
-            "auto_deploy_version": str(auto_deploy_version or "").strip(),
-            "up_wait_seconds": max(int(up_wait_seconds or 0), 0),
-            "sudo_password": sudo_password,
         }
         set_runtime_value(workflow_context, "upload_token", upload_token)
         try:
@@ -118,7 +109,6 @@ def create_module_workflow_task_runner(
                 "module-deploy",
                 workflow_context,
                 workflow_type="normal",
-                include_tree_state=include_tree_state,
                 status_reporter=_build_module_playbook_status_reporter(
                     ctx,
                     upload_token=upload_token,
@@ -128,7 +118,7 @@ def create_module_workflow_task_runner(
             summary["workflow_id"] = "module-deploy"
             summary["workflow_type"] = "normal"
             summary["workflow_result"] = playbook_result or {}
-            if include_tree_state and isinstance(playbook_result, dict):
+            if isinstance(playbook_result, dict):
                 summary["workflow_tree_state"] = playbook_result.get("tree_state")
                 summary["workflow_node_states"] = playbook_result.get("node_states") or {}
             history["workflow_id"] = "module-deploy"
@@ -138,16 +128,6 @@ def create_module_workflow_task_runner(
             log_playbook_steps(ctx, playbook_result)
             if not bool(playbook_result.get("passed")):
                 raise TaskFailure(first_failed_message(playbook_result), {"summary": summary, "history": history})
-
-            replace_step = find_playbook_step(playbook_result, "replace_remote_module_assets") or {}
-            replace_payload = replace_step.get("raw_result") if isinstance(replace_step.get("raw_result"), dict) else {}
-            if replace_payload:
-                summary["auto_deploy_version"] = str(replace_payload.get("auto_deploy_version") or summary["auto_deploy_version"])
-                summary["project_root"] = str(replace_payload.get("project_root") or "")
-                summary["replaced_paths"] = list(replace_payload.get("replaced_paths") or [])
-                summary["local_module_assets"] = replace_payload.get("local_module_assets") or {}
-                if replace_payload.get("result"):
-                    log_command_result(ctx, "替换 docker-compose.yaml", replace_payload.get("result"))
 
             stage_step = find_playbook_step(playbook_result, "stage_module_packages") or {}
             stage_payload = stage_step.get("raw_result") if isinstance(stage_step.get("raw_result"), dict) else {}

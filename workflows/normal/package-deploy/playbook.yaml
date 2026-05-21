@@ -26,7 +26,8 @@ playbooks:
 
       # 安装包准备节点产出的运行时字段
       file_name: { type: string, source: runtime }
-      file_bytes: { type: bytes, source: runtime }
+      file_size: { type: integer, source: runtime }
+      local_tmp_path: { type: string, source: runtime }
 
       # 选项探测节点产出的运行时字段
       package_options: { type: option_list, source: runtime }
@@ -74,8 +75,10 @@ playbooks:
             artifact_items:
               - file_name:
                   from_context: file_name
-                file_bytes:
-                  from_context: file_bytes
+                local_tmp_path:
+                  from_context: local_tmp_path
+                file_size:
+                  from_context: file_size
             cleanup_existing_remote_files:
               from_context: cleanup_existing_remote_files
             upload_token:

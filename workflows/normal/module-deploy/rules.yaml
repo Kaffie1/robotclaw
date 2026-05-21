@@ -2,22 +2,6 @@ version: 1
 description: module deploy rules
 
 rules:
-  rule_1:
-    op: or
-    conditions:
-      - type: compare
-        field: result.exit_code
-        op: equals
-        cast: number
-        value: 0
-      - type: compare
-        field: skipped
-        op: boolean_true
-      - type: compare
-        field: auto_deploy
-        op: equals
-        value: false
-
   rule_2:
     type: compare
     field: result.exit_code

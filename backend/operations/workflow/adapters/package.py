@@ -51,7 +51,7 @@ def _build_playbook_status_reporter(ctx: TaskContext, *, upload_token: str, tool
         ctx,
         upload_token=upload_token,
         tool_context=tool_context,
-        total_bytes_getter=lambda active_tool_context: len((active_tool_context or {}).get("file_bytes") or b""),
+        total_bytes_getter=lambda active_tool_context: int((active_tool_context or {}).get("file_size") or 0) or None,
         progress_transformer=progress_transformer,
         log_pending_confirmation=True,
     )
@@ -71,7 +71,7 @@ def _build_install_output_callback(
             return
         state["last_line"] = normalized_line
         ctx.log(f"[install] {normalized_line}")
-        total_bytes = len((tool_context or {}).get("file_bytes") or b"")
+        total_bytes = int((tool_context or {}).get("file_size") or 0) or None
         upload_progress_manager.update(
             upload_token,
             transferred_bytes=total_bytes,
@@ -97,7 +97,6 @@ def create_package_workflow_task_runner(
     cleanup_existing_remote_files: bool = True,
     upload_token: str = "",
     owner_id: str = "",
-    include_tree_state: bool = False,
 ):
     identity = robot_identity(session)
     preview_remote_path = posixpath.join(remote_dir, file_name)
@@ -183,7 +182,6 @@ def create_package_workflow_task_runner(
                 workflow_context,
                 workflow_type="normal",
                 resume_state=resume_state,
-                include_tree_state=include_tree_state,
                 status_reporter=_build_playbook_status_reporter(
                     ctx,
                     upload_token=upload_token,
@@ -193,7 +191,7 @@ def create_package_workflow_task_runner(
             summary["workflow_id"] = "package-deploy"
             summary["workflow_type"] = "normal"
             summary["workflow_result"] = playbook_result or {}
-            if include_tree_state and isinstance(playbook_result, dict):
+            if isinstance(playbook_result, dict):
                 summary["workflow_tree_state"] = playbook_result.get("tree_state")
                 summary["workflow_node_states"] = playbook_result.get("node_states") or {}
             history["workflow_id"] = "package-deploy"

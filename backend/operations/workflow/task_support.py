@@ -37,22 +37,14 @@ def build_workflow_status_reporter(
     total_bytes_getter: Callable[[dict[str, Any]], int | None],
     progress_transformer: Callable[[dict[str, str], dict[str, Any]], dict[str, str]] | None = None,
     log_pending_confirmation: bool = True,
-) -> Callable[[dict[str, Any], dict[str, Any] | None, str, str], None]:
+) -> Callable[[dict[str, Any]], None]:
     state = {"last_path": "", "last_message": ""}
 
-    def reporter(
-        execution_snapshot: dict[str, Any],
-        pending_confirmation: dict[str, Any] | None,
-        active_node_path: str,
-        active_node_message: str,
-    ) -> None:
-        node_path = str(active_node_path or "").strip()
-        progress_info = resolve_playbook_progress(
-            execution_snapshot,
-            pending_confirmation,
-            active_node_path,
-            active_node_message,
-        )
+    def reporter(execution_snapshot: dict[str, Any]) -> None:
+        pending_confirmation = execution_snapshot.get("pending_confirmation") if isinstance(execution_snapshot, dict) else None
+        node_path = str((execution_snapshot or {}).get("active_node_path") or "").strip()
+        active_node_message = str((execution_snapshot or {}).get("active_node_message") or "").strip()
+        progress_info = resolve_playbook_progress(execution_snapshot)
         if callable(progress_transformer):
             progress_info = progress_transformer(progress_info, tool_context)
         message = str(progress_info.get("message") or active_node_message or "").strip()
@@ -70,11 +62,25 @@ def build_workflow_status_reporter(
         state["last_message"] = message
         ctx.log(f"Workflow 执行中: {message}")
         total_bytes = total_bytes_getter(tool_context)
+        phase = str(progress_info.get("phase") or "").strip()
+        byte_phases = {"downloading_from_server", "uploading_to_robot"}
+        reported_transferred_bytes: int | None
+        reported_total_bytes: int | None
+        if phase in byte_phases:
+            reported_transferred_bytes = None
+            reported_total_bytes = total_bytes
+        elif phase == "installing" and total_bytes is not None:
+            reported_transferred_bytes = total_bytes
+            reported_total_bytes = total_bytes
+        else:
+            # Clear stale upload/download progress once the workflow moves into a non-byte phase.
+            reported_transferred_bytes = 0
+            reported_total_bytes = 0
         upload_progress_manager.update(
             upload_token,
-            transferred_bytes=total_bytes if progress_info["phase"] == "installing" and total_bytes is not None else None,
-            total_bytes=total_bytes,
-            phase=progress_info["phase"],
+            transferred_bytes=reported_transferred_bytes,
+            total_bytes=reported_total_bytes,
+            phase=phase,
             message=message,
             step_name=progress_info["step_name"],
             step_label=progress_info["step_label"],

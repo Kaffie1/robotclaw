@@ -46,7 +46,8 @@ def handle_prepare_artifact_sources(args: PrepareArtifactSourcesArgs, tool_conte
         if artifact_items:
             first_item = artifact_items[0] if isinstance(artifact_items[0], dict) else {}
             set_context_value(tool_context, "file_name", str(first_item.get("file_name") or "").strip())
-            set_context_value(tool_context, "file_bytes", bytes(first_item.get("file_bytes") or b""))
+            set_context_value(tool_context, "file_size", int(first_item.get("file_size") or 0))
+            set_context_value(tool_context, "local_tmp_path", str(first_item.get("local_tmp_path") or "").strip())
             if isinstance(first_item.get("source_metadata"), dict):
                 set_context_value(tool_context, "source_metadata", first_item.get("source_metadata"))
     return {

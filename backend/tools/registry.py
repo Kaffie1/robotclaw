@@ -17,21 +17,6 @@ from .docker import (
     handle_docker_compose_exec_command,
     handle_docker_compose_up_module,
 )
-from .module import (
-    ModuleHealthCheckArgs,
-    ModuleInstallArgs,
-    ModulePreparePackagesArgs,
-    ModuleReplaceRemoteAssetsArgs,
-    ModuleStagePackagesArgs,
-    ModuleStartArgs,
-    handle_module_health_check,
-    handle_module_install,
-    handle_module_prepare_packages,
-    handle_module_replace_remote_assets,
-    handle_module_stage_packages,
-    handle_module_start,
-)
-
 from .package import (
     PrepareArtifactSourcesArgs,
     RemoteExecuteWithFallbackArgs,
@@ -428,55 +413,6 @@ def _build_package_tool_definitions() -> list[ToolDefinition]:
             module="package",
         ),
     ]
-
-
-def _build_module_tool_definitions() -> list[ToolDefinition]:
-    return [
-        ToolDefinition(
-            name="module_prepare_packages",
-            description="准备模块部署安装包来源，解析本地临时文件或从文件服务器下载到本机。",
-            args_schema=ModulePreparePackagesArgs,
-            handler=handle_module_prepare_packages,
-            module="module",
-        ),
-        ToolDefinition(
-            name="module_replace_remote_assets",
-            description="自动模块部署时替换远端 config、containers 与 docker-compose 片段。",
-            args_schema=ModuleReplaceRemoteAssetsArgs,
-            handler=handle_module_replace_remote_assets,
-            module="module",
-        ),
-        ToolDefinition(
-            name="module_stage_packages",
-            description="清理旧模块包并上传新的模块安装包到目标目录。",
-            args_schema=ModuleStagePackagesArgs,
-            handler=handle_module_stage_packages,
-            module="module",
-        ),
-        ToolDefinition(
-            name="module_install",
-            description="执行模块安装命令。",
-            args_schema=ModuleInstallArgs,
-            handler=handle_module_install,
-            module="module",
-        ),
-        ToolDefinition(
-            name="module_start",
-            description="按需等待并执行模块启动命令。",
-            args_schema=ModuleStartArgs,
-            handler=handle_module_start,
-            module="module",
-        ),
-        ToolDefinition(
-            name="module_health_check",
-            description="执行模块健康检查，并在启用时自动回滚。",
-            args_schema=ModuleHealthCheckArgs,
-            handler=handle_module_health_check,
-            module="module",
-        ),
-    ]
-
-
 class ToolRegistry:
     def __init__(self) -> None:
         self._definitions = [
@@ -484,7 +420,6 @@ class ToolRegistry:
             *_build_docker_tool_definitions(),
             *_build_remote_tool_definitions(),
             *_build_package_tool_definitions(),
-            *_build_module_tool_definitions(),
         ]
         self._by_name: dict[str, ToolDefinition] = {}
         for item in self._definitions:

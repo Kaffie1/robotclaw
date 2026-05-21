@@ -28,14 +28,23 @@ def _normalize_source_items(source_items: list[dict[str, Any]] | None) -> list[d
     return normalized_items
 
 
-def _artifact_item_bytes(item: dict[str, Any]) -> bytes:
-    direct_bytes = item.get("file_bytes")
-    if isinstance(direct_bytes, (bytes, bytearray)):
-        return bytes(direct_bytes)
-    package_bytes = item.get("package_file_bytes")
-    if isinstance(package_bytes, (bytes, bytearray)):
-        return bytes(package_bytes)
-    return b""
+def _artifact_item_local_path(item: dict[str, Any]) -> str:
+    local_tmp_path = str(item.get("local_tmp_path") or "").strip()
+    if local_tmp_path:
+        return local_tmp_path
+    source_metadata = item.get("source_metadata") if isinstance(item.get("source_metadata"), dict) else {}
+    return str(source_metadata.get("local_tmp_path") or "").strip()
+
+
+def _artifact_item_size(item: dict[str, Any]) -> int:
+    explicit_size = item.get("file_size")
+    if explicit_size is None:
+        explicit_size = item.get("package_file_size")
+    try:
+        normalized_size = int(explicit_size or 0)
+    except (TypeError, ValueError):
+        normalized_size = 0
+    return max(normalized_size, 0)
 
 
 def _artifact_item_name(item: dict[str, Any]) -> str:
@@ -74,7 +83,8 @@ def prepare_artifact_sources(
             source_metadata,
             local_error_message="请选择要部署的安装包文件或填写文件服务器包路径",
         )
-        total_bytes += len(file_bytes)
+        file_size = max(int(resolved_source_metadata.get("file_size") or len(file_bytes) or 0), 0)
+        total_bytes += file_size
         upload_progress_manager.update(
             upload_token,
             transferred_bytes=total_bytes if source_kind == "file_server" else 0,
@@ -85,14 +95,13 @@ def prepare_artifact_sources(
         prepared_items.append(
             {
                 "file_name": file_name,
-                "file_bytes": file_bytes,
                 "source_metadata": resolved_source_metadata,
-                "file_size": len(file_bytes),
+                "file_size": file_size,
                 "source_kind": str(resolved_source_metadata.get("source_kind") or "").strip(),
                 "download_path": str(resolved_source_metadata.get("download_path") or "").strip(),
                 "local_tmp_path": str(resolved_source_metadata.get("local_tmp_path") or "").strip(),
                 "package_file_name": file_name,
-                "package_file_bytes": file_bytes,
+                "package_file_size": file_size,
             }
         )
     first_item = prepared_items[0]
@@ -110,7 +119,8 @@ def prepare_artifact_sources(
         "package_files": [
             {
                 "package_file_name": str(item.get("package_file_name") or ""),
-                "package_file_bytes": bytes(item.get("package_file_bytes") or b""),
+                "package_file_size": int(item.get("package_file_size") or item.get("file_size") or 0),
+                "local_tmp_path": str(item.get("local_tmp_path") or ""),
                 "source_metadata": item.get("source_metadata") or {},
             }
             for item in prepared_items
@@ -134,9 +144,10 @@ def remote_stage_artifacts(
             raise ValueError("精确路径上传模式要求且仅允许一个安装包")
         artifact = artifact_items[0]
         file_name = _artifact_item_name(artifact)
-        file_bytes = _artifact_item_bytes(artifact)
-        if not file_name or not file_bytes:
-            raise ValueError("精确路径上传缺少 file_name 或 file_bytes")
+        local_tmp_path = _artifact_item_local_path(artifact)
+        file_size = _artifact_item_size(artifact)
+        if not file_name or not local_tmp_path or file_size <= 0:
+            raise ValueError("精确路径上传缺少 file_name、local_tmp_path 或 file_size")
         resolved_remote_path = client.resolve_remote_path(target_root)
         remote_dir = posixpath.dirname(resolved_remote_path)
         removed_files: list[str] = []
@@ -156,16 +167,16 @@ def remote_stage_artifacts(
         upload_progress_manager.update(
             upload_token,
             transferred_bytes=0,
-            total_bytes=len(file_bytes),
+            total_bytes=file_size,
             phase="uploading_to_robot",
             message=f"正在上传到目标处理器: {resolved_remote_path}",
         )
-        client.upload_bytes(file_bytes, resolved_remote_path, progress_callback=progress_callback)
+        client.upload_local_file(local_tmp_path, resolved_remote_path, progress_callback=progress_callback)
         output = f"安装包已上传到机器人: {resolved_remote_path}"
         upload_progress_manager.update(
             upload_token,
-            transferred_bytes=len(file_bytes),
-            total_bytes=len(file_bytes),
+            transferred_bytes=file_size,
+            total_bytes=file_size,
             phase="completed",
             message=output,
             done=True,
@@ -177,7 +188,7 @@ def remote_stage_artifacts(
             "removed_files": removed_files,
             "upload_skipped": False,
             "cleanup_existing_remote_files": cleanup_existing_remote_files,
-            "uploaded_bytes": len(file_bytes),
+            "uploaded_bytes": file_size,
             "result": {"exit_code": 0, "stdout": output, "stderr": ""},
             "output": output,
         }
@@ -187,7 +198,7 @@ def remote_stage_artifacts(
     if not artifact_items:
         raise ValueError("目录上传模式缺少安装包列表")
 
-    total_bytes = sum(len(_artifact_item_bytes(item)) for item in artifact_items)
+    total_bytes = sum(_artifact_item_size(item) for item in artifact_items)
     transferred_total = 0
     package_summaries: list[dict[str, Any]] = []
     removed_files: list[str] = []
@@ -202,10 +213,11 @@ def remote_stage_artifacts(
     total_count = len(artifact_items)
     for package_index, artifact in enumerate(artifact_items, start=1):
         package_file_name = _artifact_item_name(artifact)
-        package_file_bytes = _artifact_item_bytes(artifact)
+        local_tmp_path = _artifact_item_local_path(artifact)
+        package_file_size = _artifact_item_size(artifact)
         source_metadata = artifact.get("source_metadata") if isinstance(artifact.get("source_metadata"), dict) else {}
-        if not package_file_name or not package_file_bytes:
-            raise ValueError("目录上传模式缺少 package_file_name/file_name 或对应字节内容")
+        if not package_file_name or not local_tmp_path or package_file_size <= 0:
+            raise ValueError("目录上传模式缺少 package_file_name/file_name、local_tmp_path 或 file_size")
         package_prefix = extract_package_prefix(package_file_name)
         temp_remote_path = client.resolve_remote_path(posixpath.join(PACKAGE_DEPLOY_DIR, package_file_name))
         remote_package_path = client.resolve_remote_path(posixpath.join(target_root, package_file_name))
@@ -274,10 +286,10 @@ def remote_stage_artifacts(
                 message=f"[{package_index}/{total_count}] 正在上传到机器人: {temp_remote_path}",
             )
 
-        client.upload_bytes(package_file_bytes, temp_remote_path, progress_callback=progress_callback)
+        client.upload_local_file(local_tmp_path, temp_remote_path, progress_callback=progress_callback)
         move_result = client.move_remote_path(temp_remote_path, remote_package_path, sudo_password=sudo_password)
         package_summary["move_result"] = move_result
-        transferred_total += len(package_file_bytes)
+        transferred_total += package_file_size
 
     upload_progress_manager.update(
         upload_token,

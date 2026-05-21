@@ -28,35 +28,14 @@ def build_fault_doc_context_from_playbook(playbook: dict[str, Any] | None) -> st
     return "相关 playbook：\n" + yaml.safe_dump(summary, allow_unicode=True, sort_keys=False).strip()
 
 
-def run_scripted_fault_playbook_by_id(
-    playbook_id: str,
-    tool_context: dict[str, Any] | None,
-    *,
-    resume_state: dict[str, Any] | None = None,
-    status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
-    tree_status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
-    include_tree_state: bool = False,
-) -> dict[str, Any] | None:
-    return run_scripted_playbook_by_id(
-        playbook_id,
-        tool_context,
-        workflow_type="fault",
-        resume_state=resume_state,
-        status_reporter=status_reporter,
-        tree_status_reporter=tree_status_reporter,
-        include_tree_state=include_tree_state,
-    )
-
-
 def run_scripted_playbook_by_id(
     playbook_id: str,
     tool_context: dict[str, Any] | None,
     *,
     workflow_type: str | None = None,
     resume_state: dict[str, Any] | None = None,
-    status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
-    tree_status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
-    include_tree_state: bool = False,
+    status_reporter: Callable[[dict[str, Any]], None] | None = None,
+    tree_status_reporter: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
     matched = find_playbook_by_id(playbook_id, workflow_type=workflow_type)
     if not matched:
@@ -67,5 +46,4 @@ def run_scripted_playbook_by_id(
         resume_state=resume_state,
         status_reporter=status_reporter,
         tree_status_reporter=tree_status_reporter,
-        include_tree_state=include_tree_state,
     )

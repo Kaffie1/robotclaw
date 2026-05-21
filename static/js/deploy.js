@@ -497,7 +497,7 @@ function clearDeployTaskTracking(deployMode) {
 function findCurrentDeployTask(tasks = [], deployMode) {
   if (currentDeployTaskIds[deployMode]) {
     const currentTask = tasks.find((task) => task.id === currentDeployTaskIds[deployMode]);
-    if (currentTask && !isTaskFinished(currentTask)) {
+    if (currentTask) {
       return currentTask;
     }
     clearDeployTaskTracking(deployMode);
@@ -530,6 +530,7 @@ function deriveDeployFlow(task = null, progress = null, deployMode = "package") 
   const progressPhase = String(progress && progress.phase ? progress.phase : "").trim().toLowerCase();
   const progressMessage = String(progress && progress.message ? progress.message : "");
   const progressError = String(progress && progress.error ? progress.error : "");
+  const installLikeProgressPhases = new Set(["installing", "probing_machine_type", "probing_options", "waiting_confirmation"]);
   const installStarted =
     taskStatus === "succeeded" ||
     taskStatus === "waiting_confirmation" ||
@@ -537,10 +538,11 @@ function deriveDeployFlow(task = null, progress = null, deployMode = "package") 
     taskError.includes("安装") ||
     taskError.includes("健康检查") ||
     taskError.includes("启动") ||
-    progressPhase === "installing" ||
-    progressPhase === "probing_machine_type" ||
+    installLikeProgressPhases.has(progressPhase) ||
     progressMessage.includes("识别机型") ||
+    progressMessage.includes("探测整包可选参数") ||
     progressMessage.includes("安装") ||
+    progressMessage.includes("等待确认") ||
     progressError.includes("识别") ||
     progressError.includes("安装");
 
@@ -612,10 +614,16 @@ function deriveDeployFlow(task = null, progress = null, deployMode = "package") 
   }
 
   if (progress) {
-    if (progressPhase === "installing" || progressPhase === "probing_machine_type") {
+    if (installLikeProgressPhases.has(progressPhase)) {
       stepStates.uploading = "done";
       stepStates.installing = "active";
-      summary = progressPhase === "probing_machine_type" ? "识别机型中" : `${actionLabel}中`;
+      if (progressPhase === "probing_machine_type" || progressPhase === "probing_options") {
+        summary = "识别机型中";
+      } else if (progressPhase === "waiting_confirmation") {
+        summary = "等待确认";
+      } else {
+        summary = `${actionLabel}中`;
+      }
     } else if (progress.done) {
       stepStates.uploading = "done";
       summary = "上传完成";
@@ -964,6 +972,8 @@ function uploadPhaseLabel(phase) {
     uploading_to_robot: "正在上传到机器人",
     installing: "上传完成，正在执行安装",
     probing_machine_type: "安装包已上传，正在识别机型",
+    probing_options: "安装包已上传，正在识别机型",
+    waiting_confirmation: "等待确认",
     completed: "上传流程已完成",
     failed: "上传失败",
   };
@@ -2051,7 +2061,13 @@ async function submitModuleDeployForm(event) {
     throw new Error("请选择要部署的模块 deb 文件");
   }
 
-  await createModuleDeployTask(formData);
+  const task = await createModuleDeployTask(formData);
+  const result = await waitForTaskCompletion(task.id);
+  finalizeUploadProgressFromTask(uploadProgressViews.moduleDeploy, result);
+  if (String(result.status || "").trim().toLowerCase() === "failed") {
+    throw new Error(result.error || "模块部署任务执行失败");
+  }
+  appendLog("模块部署完成", `${moduleName} 已完成`);
 }
 
 if (moduleDeployForm) {

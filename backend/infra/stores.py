@@ -80,7 +80,6 @@ def normalize_deploy_profile(profile: Any, defaults: dict[str, Any]) -> dict[str
         install_template = defaults["install_template"]
     normalized = {
         "probe_command_template": probe_command_template,
-        "up_wait_seconds": max(int(item.get("up_wait_seconds", defaults.get("up_wait_seconds", 0)) or 0), 0),
         "install_template": install_template,
         "start_command": str(item.get("start_command", defaults["start_command"])).strip(),
         "health_command": str(item.get("health_command", defaults["health_command"])).strip(),
@@ -106,7 +105,6 @@ def normalize_deploy_profile(profile: Any, defaults: dict[str, Any]) -> dict[str
                 continue
             machine_profiles[normalized_key] = {
                 "probe_command_template": str(machine_item.get("probe_command_template", normalized["probe_command_template"])).strip(),
-                "up_wait_seconds": max(int(machine_item.get("up_wait_seconds", normalized["up_wait_seconds"]) or 0), 0),
                 "install_template": str(machine_item.get("install_template", normalized["install_template"])).strip()
                 or normalized["install_template"],
                 "start_command": str(machine_item.get("start_command", normalized["start_command"])).strip(),

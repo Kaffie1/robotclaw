@@ -8,7 +8,6 @@ from .catalog import (
     build_fault_doc_context_from_playbook,
     list_playbooks,
     run_scripted_playbook_by_id,
-    run_scripted_fault_playbook_by_id,
 )
 
 
@@ -33,6 +32,5 @@ __all__ = [
     "match_playbook_by_title",
     "run_scripted_playbook_by_id",
     "run_scripted_fault_playbook",
-    "run_scripted_fault_playbook_by_id",
     "validate_playbook_spec",
 ]

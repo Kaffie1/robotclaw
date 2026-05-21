@@ -17,12 +17,11 @@ playbooks:
       package_sources: { type: list, source: input }
       upload_token: { type: string, source: input }
       auto_deploy: { type: boolean, source: input }
-      auto_deploy_version: { type: string, source: input }
-      up_wait_seconds: { type: integer, source: input }
 
       # 安装包准备 / 上传阶段产生的运行时字段
       file_name: { type: string, source: runtime }
-      file_bytes: { type: bytes, source: runtime }
+      file_size: { type: integer, source: runtime }
+      local_tmp_path: { type: string, source: runtime }
       package_files: { type: list, source: runtime }
       uploaded_file_paths: { type: list, source: runtime }
 
@@ -51,22 +50,6 @@ playbooks:
             upload_token:
               from_context: upload_token
           failure_message: 模块安装包来源准备失败，请检查本地上传文件或文件服务器路径
-        - type: action
-          name: replace_remote_module_assets
-          display_name: 替换自动部署模块资源
-          progress:
-            phase: preparing
-            message: 正在替换自动部署模块资源
-          tool_name: module_replace_remote_assets
-          arguments:
-            module_name:
-              from_context: module_name
-            auto_deploy:
-              from_context: auto_deploy
-            auto_deploy_version:
-              from_context: auto_deploy_version
-          assert_ref: rule_1
-          failure_message: 自动模块部署资源替换失败，请检查版本目录与机器人项目目录
         - type: action
           name: stage_module_packages
           display_name: 上传模块安装包
@@ -105,8 +88,7 @@ playbooks:
             phase: installing
             message: 正在启动模块容器
           tool_name: docker_compose_up_module
-          wait_seconds:
-            from_context: up_wait_seconds
+          wait_seconds: 5
           arguments:
             module_name:
               from_context: module_name
@@ -115,6 +97,5 @@ playbooks:
     execution_notes:
       - "模块部署会先通过共享的来源准备节点处理本地上传或文件服务器输入"
       - "模块安装包会通过共享的远端上传节点按模块目录清理旧包并上传新包"
-      - "自动模块部署会先替换本地版本目录中的 config、containers 和 docker-compose 片段"
       - "上传完成后，会把 docker compose down 和 docker compose up 作为两个独立 workflow 步骤执行"
       - "当前版本在 docker compose up 成功返回后直接结束，不再执行额外启动命令或健康检查"
