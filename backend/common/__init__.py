@@ -43,7 +43,6 @@ _EXPORTS = {
     "trace_logger": "..shared.logging",
     "truncate_trace_value": "..shared.logging",
     "build_backup_path": "..shared.remote",
-    "detect_ignored_package_install_error": "..shared.remote",
     "extract_critical_command_warnings": "..shared.remote",
     "is_dir": "..shared.remote",
     "is_remote_subpath": "..shared.remote",

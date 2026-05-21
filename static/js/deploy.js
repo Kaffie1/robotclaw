@@ -1065,7 +1065,7 @@ async function submitUploadWithProgress(
   tokenPrefix,
   {
     skipBrowserUpload = false,
-    reuseRemoteText = "准备直接安装远端文件",
+    reuseRemoteText = "已复用文件服务器包，准备进入部署工作流",
     browserCompleteText = "浏览器上传已完成，等待后台继续处理",
     remoteReuseProgressText = "已复用远端安装包，正在进入安装流程",
   } = {},
@@ -1934,6 +1934,12 @@ async function submitPackageContinueDeployForm(formNode) {
   if (autoDeployUrls.length > 1) {
     appendLog("开始自动顺序整包部署", `版本 ${packageAutoDeploySelect?.value || ""} 共 ${autoDeployUrls.length} 个包`);
   }
+  setPackageMachineAttention(false);
+  setPackageDeployHint(
+    autoDeployUrls.length > 1
+      ? `已确认机型 ${machineType}，正在继续部署当前版本下的 ${autoDeployUrls.length} 个包。`
+      : `已确认机型 ${machineType}，正在继续部署。`
+  );
   const continueResponse = await request(`/api/tasks/${packageDeployStageState.taskId}/continue`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1942,6 +1948,9 @@ async function submitPackageContinueDeployForm(formNode) {
   const continuedTask = continueResponse?.task || null;
   if (!continuedTask) {
     throw new Error("继续部署失败：未获取到任务信息");
+  }
+  if (continuedTask.status && String(continuedTask.status).trim().toLowerCase() !== "waiting_confirmation") {
+    packageDeployStageState.stage = "upload";
   }
   syncDeployFlow("package", { task: continuedTask });
   const firstResult = await waitForTaskCompletion(continuedTask.id);

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fault Playbook Generator"
+  short_description: "从问题、解决方案与协议文档生成脚本化 playbook 目录"
+  default_prompt: "Use $fault-playbook-generator to turn a fault problem, solution, and protocol.md into a scriptable playbook draft under config/fault_playbooks/<playbook_id>/playbook.yaml, following the local references/playbook.template.yaml and references/rules.template.yaml, with tool_name, arguments, assert_ref or assert, on_fail, call_playbook when a step is really another independent problem, and success_criteria for the final recovery check."

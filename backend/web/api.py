@@ -1,3 +1,4 @@
+import asyncio
 import json
 import io
 import os
@@ -17,6 +18,15 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from ..tools import tool_registry
+from ..agent import run_fault_chat_graph
+from ..agent.playbook_state import (
+    build_matched_playbook_payload_by_id,
+    clear_live_playbook_state,
+    get_live_playbook_state,
+    reset_live_playbook_execution,
+    stream_live_playbook_events,
+)
+from ..agent.graph_nodes import load_catalog_node, resolve_playbook_route
 from ..core.config import (
     DEPLOY_CONFIG_PATH,
     MAX_TASK_ITEMS,
@@ -27,16 +37,20 @@ from ..core.config import (
     STATIC_DIR,
 )
 from ..common import (
+    append_chat_history_turn,
+    delete_chat_history_file,
     get_asset_version,
+    get_chat_history,
+    logger,
     parse_bool,
     prepare_package_bytes,
     prepare_package_source,
-    render_remote_command,
     require_text,
     require_upload,
+    reset_chat_state,
     resolve_download_source_path,
 )
-from ..core.models import ApiError, ConnectPayload, ConnectionConfig, ExecutePayload, InstallDebPayload, RosServiceCallPayload, RosTopicPublishPayload, ToolCallPayload
+from ..core.models import ApiError, ConnectPayload, ConnectionConfig, ExecutePayload, RosServiceCallPayload, RosTopicPublishPayload, ToolCallPayload
 from ..shared.runtime import connection_cache_store, deploy_config_store, history_store, session_store, task_manager, templates, upload_progress_manager
 from ..tools.ros import (
     ros_list_services,
@@ -197,17 +211,135 @@ def create_app() -> FastAPI:
     def get_session_id(request: Request) -> str:
         return str(request.state.session_id or "")
 
+    def hydrate_session_last_config_from_cache(session: dict[str, Any]) -> None:
+        if not isinstance(session, dict):
+            return
+        last_config = session.get("last_config") if isinstance(session.get("last_config"), dict) else {}
+        host = str(last_config.get("host") or "").strip()
+        username = str(last_config.get("username") or "").strip()
+        if host and username:
+            return
+        saved_connections = connection_cache_store.list_entries()
+        if not saved_connections:
+            return
+        latest = saved_connections[0] if isinstance(saved_connections[0], dict) else {}
+        latest_host = str(latest.get("host") or "").strip()
+        latest_username = str(latest.get("username") or "").strip()
+        if not latest_host or not latest_username:
+            return
+        session["last_config"] = {
+            "host": latest_host,
+            "port": int(latest.get("port") or 22),
+            "username": latest_username,
+            "pico_host": str(latest.get("pico_host") or "").strip(),
+            "pico_port": int(latest.get("pico_port") or 22),
+            "pico_username": str(latest.get("pico_username") or "").strip(),
+        }
+        session["ssh_auth"] = {
+            "username": latest_username,
+            "password": str(latest.get("password") or ""),
+        }
+        session["processor_auth"] = {
+            "ORIN": {
+                "host": latest_host,
+                "port": int(latest.get("port") or 22),
+                "username": latest_username,
+                "password": str(latest.get("password") or ""),
+            },
+            "PICO": {
+                "host": str(latest.get("pico_host") or "").strip(),
+                "port": int(latest.get("pico_port") or 22),
+                "username": str(latest.get("pico_username") or "").strip(),
+                "password": str(latest.get("pico_password") or ""),
+            },
+        }
+
+    def build_connection_summary_label(connection: dict[str, Any] | None) -> str:
+        if not isinstance(connection, dict):
+            return "暂无缓存连接"
+        host = str(connection.get("host") or "").strip()
+        port = int(connection.get("port") or 22)
+        username = str(connection.get("username") or "").strip()
+        if not host or not username:
+            return "暂无缓存连接"
+        summary = f"最近使用 · ORIN {host}:{port} · {username}"
+        pico_host = str(connection.get("pico_host") or "").strip()
+        if pico_host:
+            pico_port = int(connection.get("pico_port") or 22)
+            pico_username = str(connection.get("pico_username") or "").strip() or "-"
+            summary += f" · PICO {pico_host}:{pico_port} · {pico_username}"
+        return summary
+
+    def summarize_playbook_execution(execution: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(execution, dict):
+            return {}
+        node_statuses = execution.get("node_statuses") if isinstance(execution.get("node_statuses"), dict) else {}
+        compact_statuses: dict[str, str] = {}
+        for path, payload in node_statuses.items():
+            if isinstance(payload, dict):
+                status = str(payload.get("status") or "").strip()
+            else:
+                status = str(payload or "").strip()
+            if status:
+                compact_statuses[str(path)] = status
+        return {
+            "overall_status": str(execution.get("overall_status") or "").strip(),
+            "active_node_path": str(execution.get("active_node_path") or "").strip(),
+            "node_count": len(node_statuses),
+            "node_statuses": compact_statuses,
+        }
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
         session = get_session(request)
+        hydrate_session_last_config_from_cache(session)
+        saved_connections = connection_cache_store.list_entries()
+        selected_connection_id = ""
+        selected_connection: dict[str, Any] | None = None
+        if saved_connections:
+            current_config = session.get("last_config") if isinstance(session.get("last_config"), dict) else {}
+            current_host = str(current_config.get("host") or "").strip()
+            current_port = int(current_config.get("port") or 22)
+            current_username = str(current_config.get("username") or "").strip()
+            current_pico_host = str(current_config.get("pico_host") or "").strip()
+            current_pico_port = int(current_config.get("pico_port") or 22)
+            current_pico_username = str(current_config.get("pico_username") or "").strip()
+            for connection in saved_connections:
+                if not isinstance(connection, dict):
+                    continue
+                if (
+                    str(connection.get("host") or "").strip() == current_host
+                    and int(connection.get("port") or 22) == current_port
+                    and str(connection.get("username") or "").strip() == current_username
+                    and str(connection.get("pico_host") or "").strip() == current_pico_host
+                    and int(connection.get("pico_port") or 22) == current_pico_port
+                    and str(connection.get("pico_username") or "").strip() == current_pico_username
+                ):
+                    selected_connection_id = str(connection.get("id") or "").strip()
+                    selected_connection = connection
+                    break
+            if not selected_connection_id:
+                selected_connection = saved_connections[0] if isinstance(saved_connections[0], dict) else None
+                selected_connection_id = str((selected_connection or {}).get("id") or "").strip()
+        ssh_auth = session.get("ssh_auth") if isinstance(session.get("ssh_auth"), dict) else {}
+        processor_auth = session.get("processor_auth") if isinstance(session.get("processor_auth"), dict) else {}
+        orin_auth = processor_auth.get("ORIN") if isinstance(processor_auth.get("ORIN"), dict) else {}
+        pico_auth = processor_auth.get("PICO") if isinstance(processor_auth.get("PICO"), dict) else {}
+        form_defaults = {
+            **dict(session.get("last_config") or {}),
+            "password": str(ssh_auth.get("password") or orin_auth.get("password") or ""),
+            "pico_password": str(pico_auth.get("password") or ""),
+        }
         return templates.TemplateResponse(
             request=request,
             name="index.html",
             context={
                 "request": request,
-                "defaults": session["last_config"],
+                "defaults": form_defaults,
                 "connected": session["client"].connected,
-                "saved_connections": connection_cache_store.list_entries(),
+                "saved_connections": saved_connections,
+                "selected_connection_id": selected_connection_id,
+                "selected_connection_summary": build_connection_summary_label(selected_connection),
                 "package_machine_options": deploy_config_store.get_machine_options("package"),
                 "module_machine_options": deploy_config_store.get_machine_options("module"),
                 "asset_version": get_asset_version(),
@@ -217,6 +349,7 @@ def create_app() -> FastAPI:
     @app.get("/api/status")
     def api_status(request: Request):
         session = get_session(request)
+        hydrate_session_last_config_from_cache(session)
         if session["client"].connected and not session.get("remote_shortcuts"):
             refresh_remote_shortcuts(session)
         return {
@@ -279,6 +412,10 @@ def create_app() -> FastAPI:
         session["client"].close()
         session["remote_shortcuts"] = []
         session["preferred_root"] = "/"
+        tool_context = {"session_id": get_session_id(request)}
+        reset_chat_state(tool_context)
+        delete_chat_history_file(tool_context)
+        clear_live_playbook_state(session_id=get_session_id(request))
         session["ssh_auth"] = {"username": str(session["last_config"].get("username") or ""), "password": ""}
         session["processor_auth"] = {
             "ORIN": {
@@ -295,6 +432,182 @@ def create_app() -> FastAPI:
             },
         }
         return {"ok": True, "message": "已断开连接"}
+
+    @app.post("/api/chat")
+    async def api_chat(request: Request):
+        session = get_session(request)
+        session_id = get_session_id(request)
+        body = await request.json()
+        message = str(body.get("message") or "").strip()
+        continuation = body.get("continuation")
+        history = body.get("history")
+        route_selection = body.get("route_selection")
+        if continuation is not None and not isinstance(continuation, dict):
+            return JSONResponse(content={"ok": False, "error": "continuation 必须是对象"}, status_code=400)
+        if history is not None and not isinstance(history, list):
+            return JSONResponse(content={"ok": False, "error": "history 必须是数组"}, status_code=400)
+        if route_selection is not None and not isinstance(route_selection, dict):
+            return JSONResponse(content={"ok": False, "error": "route_selection 必须是对象"}, status_code=400)
+        if continuation is None and not message:
+            return JSONResponse(content={"ok": False, "error": "消息内容不能为空"}, status_code=400)
+        if isinstance(continuation, dict):
+            user_message = str(continuation.get("user_message") or "").strip()
+            if not user_message:
+                return JSONResponse(content={"ok": False, "error": "continuation 缺少 user_message"}, status_code=400)
+            tool_context: dict[str, Any] = {"session_id": session_id, **dict(continuation.get("tool_context") or {})}
+        else:
+            user_message = message
+            tool_context = {"session_id": session_id}
+        last_config = session.get("last_config") or {}
+        route_selection_payload = build_matched_playbook_payload_by_id(str((route_selection or {}).get("playbook_id") or "").strip())
+        continuation_kind = str((continuation or {}).get("kind") or "").strip() if isinstance(continuation, dict) else ""
+        if isinstance(continuation, dict):
+            raw_resume_state = continuation.get("resume_state")
+            resume_completed_nodes = raw_resume_state.get("completed_nodes") if isinstance(raw_resume_state, dict) else {}
+            logger.info(
+                "API /api/chat 收到 continuation | session_id=%s | kind=%s | has_resume_state=%s | resume_completed_nodes=%s",
+                session_id,
+                continuation_kind,
+                isinstance(raw_resume_state, dict),
+                sorted(str(key) for key in (resume_completed_nodes or {}).keys()) if isinstance(resume_completed_nodes, dict) else [],
+            )
+        if not isinstance(continuation, dict):
+            if route_selection_payload:
+                reset_live_playbook_execution(session_id=session_id, playbook=route_selection_payload)
+            else:
+                clear_live_playbook_state(session_id=session_id)
+        result = await asyncio.to_thread(
+            run_fault_chat_graph,
+            user_message,
+            runtime_context={
+                "connected": bool(session["client"].connected),
+                "host": str(last_config.get("host") or ""),
+                "port": str(last_config.get("port") or ""),
+                "username": str(last_config.get("username") or ""),
+                "preferred_root": str(session.get("preferred_root") or "/"),
+                "recent_tasks": task_manager.list_tasks_for_owner(session_id, MAX_TASK_ITEMS),
+            },
+            tool_context=tool_context,
+            conversation_history=[
+                {
+                    "role": str(item.get("role") or "").strip(),
+                    "content": str(item.get("content") or "").strip(),
+                }
+                for item in (history or [])
+                if isinstance(item, dict)
+            ],
+            resume_continuation=continuation if isinstance(continuation, dict) else None,
+            confirmation_response=message if continuation_kind == "playbook_confirmation" else "",
+            prefetched_playbook_id=str((route_selection or {}).get("playbook_id") or "").strip(),
+            prefetched_playbook_title=str((route_selection or {}).get("playbook_title") or "").strip(),
+            prefetched_reason=str((route_selection or {}).get("reason") or "").strip(),
+        )
+        append_chat_history_turn(
+            tool_context,
+            user_message=user_message,
+            assistant_message=str(result.get("message") or ""),
+        )
+        logger.info(
+            "API /api/chat 返回流程图状态 | session_id=%s | summary=%s",
+            session_id,
+            json.dumps(summarize_playbook_execution(result.get("playbook_execution")), ensure_ascii=False),
+        )
+        return {"ok": True, **result}
+
+    @app.post("/api/chat/reset")
+    def api_chat_reset(request: Request):
+        session_id = get_session_id(request)
+        reset_chat_state({"session_id": session_id})
+        clear_live_playbook_state(session_id=session_id)
+        return {"ok": True, "message": "聊天上下文已清空"}
+
+    @app.get("/api/chat/history")
+    def api_chat_history(request: Request):
+        return {"ok": True, "history": get_chat_history({"session_id": get_session_id(request)})}
+
+    @app.post("/api/chat/route")
+    async def api_chat_route(request: Request):
+        session_id = get_session_id(request)
+        body = await request.json()
+        message = str(body.get("message") or "").strip()
+        continuation = body.get("continuation")
+        if continuation is not None and not isinstance(continuation, dict):
+            return JSONResponse(content={"ok": False, "error": "continuation 必须是对象"}, status_code=400)
+        if not continuation and not message:
+            return JSONResponse(content={"ok": False, "error": "消息内容不能为空"}, status_code=400)
+        route_state = {
+            **load_catalog_node({}),
+            "session_id": session_id,
+            "user_message": message,
+            "resume_continuation": continuation if isinstance(continuation, dict) else None,
+        }
+        route_result = await asyncio.to_thread(resolve_playbook_route, route_state, publish=True)
+        playbook_id = str(route_result.get("selected_playbook_id") or "").strip()
+        playbook_title = str(route_result.get("selected_playbook_title") or "").strip()
+        reason = str(route_result.get("reason") or "").strip()
+        playbook_payload = build_matched_playbook_payload_by_id(playbook_id)
+        return {
+            "ok": True,
+            "route_selection": {
+                "playbook_id": playbook_id,
+                "playbook_title": playbook_title,
+                "reason": reason,
+            },
+            "playbook": playbook_payload,
+        }
+
+    @app.get("/api/chat/state")
+    async def api_chat_state(request: Request):
+        session_id = get_session_id(request)
+        raw_since_version = request.query_params.get("since_version", "0")
+        try:
+            since_version = max(int(raw_since_version), 0)
+        except ValueError:
+            since_version = 0
+        payload = get_live_playbook_state(session_id=session_id, since_version=since_version)
+        logger.info(
+            "API /api/chat/state 返回流程图状态 | session_id=%s | since_version=%s | summary=%s",
+            session_id,
+            since_version,
+            json.dumps(summarize_playbook_execution(payload.get("playbook_execution")), ensure_ascii=False),
+        )
+        return {"ok": True, **payload}
+
+    @app.get("/api/chat/events")
+    async def api_chat_events(request: Request):
+        session_id = get_session_id(request)
+        raw_since_version = request.query_params.get("since_version", "0")
+        try:
+            since_version = max(int(raw_since_version), 0)
+        except ValueError:
+            since_version = 0
+        logger.info(
+            "API /api/chat/events 建立SSE | session_id=%s | since_version=%s",
+            session_id,
+            since_version,
+        )
+        return StreamingResponse(
+            stream_live_playbook_events(session_id=session_id, since_version=since_version),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.get("/api/agent/tools")
+    def api_agent_tools():
+        return {"ok": True, "items": tool_registry.list_definitions()}
+
+    @app.post("/api/agent/tool-call")
+    def api_agent_tool_call(payload: ToolCallPayload, request: Request):
+        result = tool_registry.call_tool(
+            payload.name,
+            payload.arguments,
+            {"session_id": get_session_id(request)},
+        )
+        return {"ok": True, "result": result}
 
     @app.get("/api/connection-cache")
     def api_connection_cache():
@@ -580,41 +893,6 @@ def create_app() -> FastAPI:
             raise ApiError("历史记录不存在", status_code=404)
         title, runner = create_history_rollback_runner(get_session(request), entry)
         return {"ok": True, "task": task_manager.create_task("rollback", title, {"source_history_id": entry_id, "operation_type": entry["operation_type"]}, runner, owner_id=get_session_id(request))}
-
-    @app.post("/api/upload-deb")
-    def api_upload_deb(request: Request, remote_dir: str = Form(...), command_template: str = Form("dpkg -i {deb_path}"), install_after_upload: str | None = Form(None), upload_token: str = Form(""), deb_file: UploadFile | None = File(None)):
-        session = get_session(request)
-        session_id = get_session_id(request)
-        client = ensure_client_connected(session)
-        upload = require_upload(deb_file, "请上传 deb 文件")
-        remote_dir = require_text(remote_dir, "远程目录不能为空")
-        filename = os.path.basename(upload.filename or "package.deb")
-        raw_bytes = upload.file.read()
-        try:
-            upload_progress_manager.start(upload_token, file_name=filename, total_bytes=len(raw_bytes), phase="uploading_to_robot", message="正在上传到机器人", owner_id=session_id)
-            remote_path = client.resolve_remote_path(posixpath.join(remote_dir, filename))
-            client.upload_bytes(raw_bytes, remote_path, progress_callback=lambda transferred, total: upload_progress_manager.update(upload_token, transferred_bytes=transferred, total_bytes=total, phase="uploading_to_robot", message=f"正在上传到机器人: {remote_path}"))
-            session["last_remote_deb_path"] = remote_path
-            install_result = None
-            install_command = None
-            if parse_bool(install_after_upload):
-                upload_progress_manager.update(upload_token, transferred_bytes=len(raw_bytes), total_bytes=len(raw_bytes), phase="installing", message="安装包上传完成，正在执行安装命令")
-                install_command = render_remote_command(str(command_template or "dpkg -i {deb_path}"), remote_path)
-                install_result = client.exec_noninteractive_command(install_command)
-            upload_progress_manager.update(upload_token, transferred_bytes=len(raw_bytes), total_bytes=len(raw_bytes), phase="completed", message=f"安装包处理完成: {remote_path}", done=True)
-            return {"ok": True, "message": f"deb 已上传到 {remote_path}", "remote_path": remote_path, "install_command": install_command, "install_result": install_result}
-        except Exception as exc:  # noqa: BLE001
-            upload_progress_manager.fail(upload_token, f"上传失败: {exc}")
-            raise
-
-    @app.post("/api/install-deb")
-    def api_install_deb(payload: InstallDebPayload, request: Request):
-        session = get_session(request)
-        remote_path = require_text(payload.remote_path, "远程 deb 路径不能为空")
-        command = render_remote_command(str(payload.command_template or "dpkg -i {deb_path}"), remote_path)
-        result = ensure_client_connected(session).exec_noninteractive_command(command)
-        session["last_remote_deb_path"] = remote_path
-        return {"ok": True, "command": command, "result": result}
 
     @app.post("/api/execute")
     def api_execute(payload: ExecutePayload, request: Request):

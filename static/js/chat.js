@@ -14,7 +14,7 @@ const playbookZoomInBtn = document.getElementById("playbookZoomInBtn");
 const playbookZoomResetBtn = document.getElementById("playbookZoomResetBtn");
 const playbookZoomValue = document.getElementById("playbookZoomValue");
 
-const PLAYBOOK_MIN_ZOOM = 0.6;
+const PLAYBOOK_MIN_ZOOM = 0.2;
 const PLAYBOOK_MAX_ZOOM = 1.8;
 const PLAYBOOK_ZOOM_STEP = 0.1;
 const PLAYBOOK_EVENT_PLAYBACK_MS = 180;
@@ -407,14 +407,85 @@ function normalizeNodeType(nodeType) {
 }
 
 function normalizeExecutionStatus(status) {
-  return ["unstarted", "pending", "success", "failed", "skipped"].includes(String(status || ""))
-    ? String(status)
-    : "unstarted";
+  const normalized = String(status || "").trim().toLowerCase();
+  if (["pending", "running", "waiting_confirmation"].includes(normalized)) return "pending";
+  if (["success", "succeeded", "passed"].includes(normalized)) return "success";
+  if (["failed", "failure", "error"].includes(normalized)) return "failed";
+  if (["skipped", "skip"].includes(normalized)) return "skipped";
+  if (["unstarted", "idle", ""].includes(normalized)) return "unstarted";
+  return "unstarted";
+}
+
+function getPlaybookExecutionEntry(path) {
+  const nodeStatuses = chatState.playbookExecution?.node_statuses;
+  if (!nodeStatuses || typeof nodeStatuses !== "object") return null;
+  const direct = nodeStatuses[path];
+  if (typeof direct === "string") return { status: direct };
+  if (direct && typeof direct === "object") return direct;
+  return null;
+}
+
+function getAncestorNodePath(path) {
+  const normalized = String(path || "").trim();
+  if (!normalized || normalized === "root") return "";
+  return normalized.replace(/\.children\[\d+\]$/, "");
 }
 
 function getNodeExecutionStatus(path) {
-  const execution = chatState.playbookExecution?.node_statuses?.[path];
-  return normalizeExecutionStatus(execution?.status);
+  const explicit = normalizeExecutionStatus(getPlaybookExecutionEntry(path)?.status);
+  if (explicit !== "unstarted") return explicit;
+
+  if (String(path || "").trim() === "root") {
+    return normalizeExecutionStatus(chatState.playbookExecution?.overall_status);
+  }
+
+  let ancestorPath = getAncestorNodePath(path);
+  while (ancestorPath) {
+    const inherited = normalizeExecutionStatus(getPlaybookExecutionEntry(ancestorPath)?.status);
+    if (inherited === "skipped") return "skipped";
+    ancestorPath = getAncestorNodePath(ancestorPath);
+  }
+  return "unstarted";
+}
+
+function countPlaybookExecutionNodes(execution) {
+  const nodeStatuses = execution?.node_statuses;
+  return nodeStatuses && typeof nodeStatuses === "object" ? Object.keys(nodeStatuses).length : 0;
+}
+
+function summarizePlaybookExecutionForDebug(execution) {
+  const nodeStatuses = execution?.node_statuses;
+  const compactStatuses = {};
+  if (nodeStatuses && typeof nodeStatuses === "object") {
+    Object.entries(nodeStatuses).forEach(([path, payload]) => {
+      if (payload && typeof payload === "object") {
+        compactStatuses[path] = String(payload.status || "").trim();
+      } else {
+        compactStatuses[path] = String(payload || "").trim();
+      }
+    });
+  }
+  return {
+    overall_status: String(execution?.overall_status || "").trim(),
+    active_node_path: String(execution?.active_node_path || "").trim(),
+    node_count: Object.keys(compactStatuses).length,
+    node_statuses: compactStatuses,
+  };
+}
+
+function mergePlaybookExecution(currentExecution, nextExecution) {
+  if (!nextExecution || typeof nextExecution !== "object") return null;
+  if (!currentExecution || typeof currentExecution !== "object") return nextExecution;
+
+  const currentCount = countPlaybookExecutionNodes(currentExecution);
+  const nextCount = countPlaybookExecutionNodes(nextExecution);
+  if (nextCount >= currentCount) return nextExecution;
+
+  return {
+    ...currentExecution,
+    ...nextExecution,
+    node_statuses: currentExecution.node_statuses,
+  };
 }
 
 function truncateText(text, maxLength = 24) {
@@ -437,6 +508,30 @@ function applyPlaybookZoom() {
   if (playbookZoomInBtn) playbookZoomInBtn.disabled = playbookZoom >= PLAYBOOK_MAX_ZOOM;
 }
 
+function applyPlaybookExecutionToRenderedGraph() {
+  if (!playbookGraph) return;
+  const nodeCards = playbookGraph.querySelectorAll(".flow-node-card[data-node-path]");
+  const renderedStatuses = {};
+  nodeCards.forEach((card) => {
+    if (!(card instanceof HTMLElement)) return;
+    const path = String(card.dataset.nodePath || "").trim();
+    const status = getNodeExecutionStatus(path);
+    renderedStatuses[path] = status;
+    card.classList.remove("status-unstarted", "status-pending", "status-success", "status-failed", "status-skipped");
+    card.classList.add(`status-${status}`);
+    const dot = card.querySelector(".flow-node-dot");
+    if (dot instanceof HTMLElement) {
+      dot.classList.remove("status-unstarted", "status-pending", "status-success", "status-failed", "status-skipped");
+      dot.classList.add(`status-${status}`);
+    }
+  });
+  console.debug("[playbook-ui] rendered-node-statuses", {
+    received: summarizePlaybookExecutionForDebug(chatState.playbookExecution),
+    rendered_paths: Array.from(nodeCards).map((card) => String(card.dataset.nodePath || "").trim()),
+    rendered_statuses: renderedStatuses,
+  });
+}
+
 function setPlaybookZoom(nextZoom) {
   const clamped = Math.min(PLAYBOOK_MAX_ZOOM, Math.max(PLAYBOOK_MIN_ZOOM, Number(nextZoom) || 1));
   playbookZoom = Math.round(clamped * 100) / 100;
@@ -444,16 +539,32 @@ function setPlaybookZoom(nextZoom) {
 }
 
 function maybeShowPlaybookFromResponse(data) {
-  chatState.playbookExecution = data.playbook_execution && typeof data.playbook_execution === "object"
+  const hasExecutionField = Object.prototype.hasOwnProperty.call(data || {}, "playbook_execution");
+  const nextExecution = data.playbook_execution && typeof data.playbook_execution === "object"
     ? data.playbook_execution
     : null;
   if (Number.isFinite(Number(data?.version))) {
     livePlaybookVersion = Math.max(livePlaybookVersion, Number(data.version) || 0);
   }
   const playbook = data.playbook || data.matched_playbook || data.matched_context || data.playbook_context || null;
+  const currentPlaybookId = String(chatState.playbook?.id || chatState.playbook?.playbook_id || "").trim();
+  const nextPlaybookId = String(playbook?.id || playbook?.playbook_id || "").trim();
+  if (nextExecution) {
+    console.debug("[playbook-ui] maybeShowPlaybookFromResponse received execution", summarizePlaybookExecutionForDebug(nextExecution));
+  }
+  if (nextExecution) {
+    chatState.playbookExecution = mergePlaybookExecution(chatState.playbookExecution, nextExecution);
+    console.debug("[playbook-ui] merged execution", summarizePlaybookExecutionForDebug(chatState.playbookExecution));
+  } else if (hasExecutionField && (!playbook || !nextPlaybookId || nextPlaybookId !== currentPlaybookId)) {
+    chatState.playbookExecution = null;
+  }
   if (playbook && typeof playbook === "object") {
     showPlaybook(playbook);
+    applyPlaybookExecutionToRenderedGraph();
     return;
+  }
+  if (chatState.playbook && chatState.playbookExecution) {
+    applyPlaybookExecutionToRenderedGraph();
   }
   if (Object.prototype.hasOwnProperty.call(data || {}, "playbook") || Object.prototype.hasOwnProperty.call(data || {}, "playbook_execution")) {
     chatState.playbook = null;

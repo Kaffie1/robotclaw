@@ -18,7 +18,7 @@ window.addEventListener("load", async () => {
     syncSessionIdentity(data.session_id);
     const chatHistoryData = await request("/api/chat/history");
     hydrateChatHistory(chatHistoryData.history || []);
-    hydrateConnectionCache(data.saved_connections || []);
+    hydrateConnectionCache(data.saved_connections || [], { forceApplyMostRecent: true });
     updateConnectionStatus(Boolean(data.connected));
     await syncRemoteDirectories({
       connected: data.connected,

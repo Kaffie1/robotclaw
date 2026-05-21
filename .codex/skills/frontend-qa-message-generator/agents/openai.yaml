@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend QA Message Generator"
+  short_description: "把 QA 文本整理成可直接返回前端的 qa_message JSON"
+  default_prompt: "Use $frontend-qa-message-generator to convert free-form QA text into a single frontend-ready JSON object. Default to `{\"type\":\"qa_message\",\"question\":\"\",\"answer\":\"\",\"steps\":[],\"conclusion\":\"\",\"follow_up_questions\":[]}`. Fill only the facts present in the QA text, keep the wording concise for direct UI rendering, do not output Markdown code fences, and do not invent extra fields unless the user explicitly provides a different schema."

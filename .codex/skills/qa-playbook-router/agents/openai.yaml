@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA Playbook Router"
+  short_description: "读取文本或文件并判断该走 QA skill 还是 playbook skill"
+  default_prompt: "Use $qa-playbook-router when the input may be either a frontend QA-style answer or a scriptable playbook source. Read the provided text or local file content first, extract the relevant parts, decide whether it should route to `frontend-qa-message-generator` or `fault-playbook-generator`, briefly state the route and reason, then continue and produce the final output using the chosen skill instead of stopping at classification."

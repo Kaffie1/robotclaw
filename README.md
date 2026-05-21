@@ -72,11 +72,6 @@ chmod +x service.sh
 PYTHON_BIN=/path/to/python APP_PORT=9000 ./service.sh start
 ```
 
-容器通过 `docker_compose_up_module` 启动后的默认等待时间可通过环境变量覆盖：
-
-```bash
-DOCKER_COMPOSE_UP_WAIT_SECONDS=15
-```
 
 服务日志和 PID 文件位于：
 

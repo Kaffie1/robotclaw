@@ -99,14 +99,14 @@
                     <span class="remote-cache-title">已缓存连接</span>
                     <div class="remote-cache-select-shell remote-cache-select-main" role="button" tabindex="0" aria-label="选择已缓存连接">
                       <select id="savedConnectionSelect" class="remote-cache-native-select">
-                        <option value="">选择已缓存连接</option>
+                        <option value="" {% if not selected_connection_id %}selected{% endif %}>选择已缓存连接</option>
                         {% for connection in saved_connections %}
-                        <option value="{{ connection.id }}">
+                        <option value="{{ connection.id }}" {% if connection.id == selected_connection_id %}selected{% endif %}>
                           {% if loop.index0 == 0 %}最近使用 · {% endif %}ORIN {{ connection.host }}:{{ connection.port }} · {{ connection.username }}{% if connection.pico_host %} · PICO {{ connection.pico_host }}:{{ connection.pico_port }} · {{ connection.pico_username or '-' }}{% endif %}
                         </option>
                         {% endfor %}
                       </select>
-                      <span class="remote-cache-summary" id="savedConnectionSummary">暂无缓存连接</span>
+                      <span class="remote-cache-summary" id="savedConnectionSummary">{{ selected_connection_summary }}</span>
                       <span class="remote-cache-chevron" aria-hidden="true"></span>
                     </div>
                     <button type="button" class="ghost inline-button" id="clearConnectionCacheBtn">清空缓存</button>
@@ -149,7 +149,7 @@
                         <span class="input-icon" aria-hidden="true">
                           <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/></svg>
                         </span>
-                        <input type="password" name="password" placeholder="输入密码" />
+                        <input type="password" name="password" value="{{ defaults.password }}" placeholder="输入密码" />
                         <button type="button" class="password-toggle" data-password-toggle aria-label="显示密码" title="显示密码">
                           <svg class="password-toggle-icon icon-eye" viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -199,7 +199,7 @@
                         <span class="input-icon" aria-hidden="true">
                           <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/></svg>
                         </span>
-                        <input type="password" name="pico_password" placeholder="输入 PICO 密码" />
+                        <input type="password" name="pico_password" value="{{ defaults.pico_password }}" placeholder="输入 PICO 密码" />
                         <button type="button" class="password-toggle" data-password-toggle aria-label="显示密码" title="显示密码">
                           <svg class="password-toggle-icon icon-eye" viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>

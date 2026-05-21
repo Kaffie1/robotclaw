@@ -228,6 +228,22 @@ class ToolBehaviour(py_trees.behaviour.Behaviour):
             self.state.active_node_message = str(interrupt.request.get("message") or self.state.active_node_message).strip()
             self.state.emit_status_update()
             raise
+        except Exception as exc:  # noqa: BLE001
+            error_message = str(getattr(exc, "message", "") or str(exc) or "节点执行失败").strip()
+            result = {
+                "name": str(self.node_spec.get("name") or self.node_spec.get("tool_name") or "").strip(),
+                "tool_name": str(self.node_spec.get("tool_name") or "").strip(),
+                "arguments": self.node_spec.get("arguments") if isinstance(self.node_spec.get("arguments"), dict) else {},
+                "output": error_message,
+                "raw_result": {"ok": False, "error": error_message},
+                "passed": False,
+                "assert_ref": str(self.node_spec.get("assert_ref") or self.node_spec.get("expect") or "").strip(),
+                "node_path": self.node_path,
+                "wait_seconds": max(int(self.node_spec.get("wait_seconds") or 0), 0),
+                "confirm_times": max(int(self.node_spec.get("confirm_times") or 1), 1),
+                "attempts": [],
+                "failure_message": error_message,
+            }
         result["node_type"] = self.node_kind
         self.state.steps.append(result)
         update_observations(self.state.observations, result)

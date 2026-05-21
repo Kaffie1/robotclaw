@@ -6,7 +6,6 @@ from ....infra.stores import TaskContext
 from ....shared.runtime import upload_progress_manager
 from ....shared.confirmation import apply_confirmation_response, set_runtime_value
 from ....common import (
-    detect_ignored_package_install_error,
     extract_critical_command_warnings,
     log_command_result,
     render_remote_command,
@@ -269,11 +268,6 @@ def create_package_workflow_task_runner(
                     ctx.log("安装命令输出命中成功标记: Deployment finished successfully")
                 if "Update Version Success" in install_output_text:
                     ctx.log("安装命令输出命中成功标记: Update Version Success")
-                if int(install_result.get("exit_code") or 0) != 0:
-                    ignored_error = detect_ignored_package_install_error(install_result)
-                    if ignored_error:
-                        warnings.append(ignored_error)
-                        ctx.log(f"告警: {ignored_error}")
                 install_warnings = extract_critical_command_warnings("安装命令", install_result)
                 warnings.extend(install_warnings)
                 for warning in install_warnings:

@@ -91,52 +91,6 @@ def iter_command_output_lines(text: str) -> list[str]:
     return [line.rstrip() for line in normalized.splitlines()]
 
 
-def detect_ignored_package_install_error(result: dict[str, Any]) -> str | None:
-    exit_code = int(result.get("exit_code", 0) or 0)
-    if exit_code == 0:
-        return None
-
-    stderr_text = str(result.get("stderr") or "")
-    stdout_text = str(result.get("stdout") or "")
-    combined_text = f"{stdout_text}\n{stderr_text}"
-    success_markers = [
-        "Deployment finished successfully",
-        "Update Version Success",
-    ]
-    if not any(marker in combined_text for marker in success_markers):
-        return None
-
-    tolerated_arg_patterns = [
-        re.compile(r"Could not consume arg:\s+--user="),
-        re.compile(r"Could not consume arg:\s+--password="),
-    ]
-    matched_patterns = [pattern for pattern in tolerated_arg_patterns if pattern.search(combined_text)]
-    if not matched_patterns:
-        return None
-
-    normalized_lines = [
-        line.strip()
-        for line in iter_command_output_lines(combined_text)
-        if line.strip()
-    ]
-    unexpected_error_lines: list[str] = []
-    for line in normalized_lines:
-        if "Could not consume arg:" in line and ("--user=" in line or "--password=" in line):
-            continue
-        if any(marker in line for marker in success_markers):
-            continue
-        if "For detailed information on this command" in line:
-            continue
-        if line.startswith("Usage: zjh_deploy "):
-            continue
-        if re.search(r"\b(ERROR|Error|Exception|Traceback)\b", line):
-            unexpected_error_lines.append(line)
-
-    if unexpected_error_lines:
-        return None
-    return "安装包主体已成功部署，尾部仅出现新版本兼容参数告警，已忽略退出码"
-
-
 def log_command_result(ctx, label: str, result: dict[str, Any]) -> None:
     ctx.log(f"{label}退出码: {result.get('exit_code', '')}")
     for stream_name, stream_label in (("stdout", "标准输出"), ("stderr", "错误输出")):

@@ -2,7 +2,7 @@ __pycache__/
 *.py[cod]
 
 .runtime/
-.codex/
+# .codex/
 .env
 
 data/

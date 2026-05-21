@@ -11,31 +11,6 @@ from ...infra import RobotClient
 from ..services import ensure_client_connected, robot_identity
 
 
-def render_package_install_command(
-    template: str,
-    remote_path: str,
-    *,
-    machine_type: str,
-    device_type: str,
-    target_username: str,
-    target_password: str,
-    include_target_credentials: bool,
-) -> str:
-    normalized_template = str(template or "")
-    if not include_target_credentials:
-        normalized_template = re.sub(r"\s+--user=\{target_username\}", "", normalized_template)
-        normalized_template = re.sub(r"\s+--password=\{target_password\}", "", normalized_template)
-        normalized_template = re.sub(r"\s{2,}", " ", normalized_template).strip()
-    template_vars: dict[str, Any] = {
-        "machine_type": machine_type,
-        "device_type": device_type,
-    }
-    if include_target_credentials and "--user" in normalized_template:
-        template_vars["target_username"] = target_username
-        template_vars["target_password"] = target_password
-    return render_remote_command(normalized_template, remote_path, template_vars)
-
-
 def probe_remote_package_supports_credentials(client, remote_path: str) -> bool:
     command = f"grep -a -Eq -- '--user|--password' {shlex.quote(remote_path)}"
     result = client.exec_noninteractive_command(command)

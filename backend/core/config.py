@@ -29,7 +29,12 @@ load_env_file(BASE_DIR / ".env")
 
 APP_HOST = str(os.getenv("APP_HOST") or "0.0.0.0").strip() or "127.0.0.1"
 APP_PORT = int(str(os.getenv("APP_PORT") or "8000").strip() or "8000")
-DOCKER_COMPOSE_UP_WAIT_SECONDS = max(int(str(os.getenv("DOCKER_COMPOSE_UP_WAIT_SECONDS") or "10").strip() or "10"), 0)
+OPENAI_API_KEY = str(os.getenv("OPENAI_API_KEY") or "").strip()
+OPENAI_BASE_URL = str(os.getenv("OPENAI_BASE_URL") or "").strip()
+OPENAI_CHAT_MODEL = str(os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini").strip() or "gpt-4.1-mini"
+OPENAI_CHAT_TEMPERATURE = float(str(os.getenv("OPENAI_CHAT_TEMPERATURE") or "0.2").strip() or "0.2")
+OPENAI_ENABLE_REASONING_SPLIT = str(os.getenv("OPENAI_ENABLE_REASONING_SPLIT") or "").strip().lower() in {"1", "true", "yes", "on"}
+OPENAI_THINK = str(os.getenv("OPENAI_THINK") or "").strip()
 
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATE_DIR = BASE_DIR / "templates"

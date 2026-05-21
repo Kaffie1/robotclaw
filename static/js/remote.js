@@ -215,7 +215,7 @@ function isDefaultConnectionForm(connection) {
   );
 }
 
-function hydrateConnectionCache(savedConnections = []) {
+function hydrateConnectionCache(savedConnections = [], { forceApplyMostRecent = false } = {}) {
   const currentForm = readConnectionForm();
   const selectedId = findSavedConnectionIdForForm(currentForm);
   setSavedConnections(savedConnections, { selectedId });
@@ -235,6 +235,10 @@ function hydrateConnectionCache(savedConnections = []) {
     return;
   }
   if (!savedConnectionsCache.length) {
+    return;
+  }
+  if (forceApplyMostRecent) {
+    applyConnectionToForm(savedConnectionsCache[0]);
     return;
   }
   if (!isDefaultConnectionForm(currentForm) && currentForm.host) {
@@ -289,7 +293,10 @@ connectForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(payload),
     });
     const selectedConnection = normalizeConnectionCacheItem(payload);
-    setSavedConnections(data.saved_connections || [], { selectedId: selectedConnection ? selectedConnection.id : "" });
+    hydrateConnectionCache(
+      data.saved_connections || [],
+      { forceApplyMostRecent: Boolean(selectedConnection) },
+    );
     updateConnectionStatus(true);
     rosState.hasLoadedTopics = false;
     rosState.hasLoadedServices = false;

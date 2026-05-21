@@ -38,11 +38,6 @@ class ConnectPayload(BaseModel):
     pico_password: str = ""
 
 
-class InstallDebPayload(BaseModel):
-    remote_path: str
-    command_template: str = "dpkg -i {deb_path}"
-
-
 class ExecutePayload(BaseModel):
     command: str
     interactive: bool = False
