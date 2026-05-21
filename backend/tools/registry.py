@@ -36,7 +36,6 @@ from .package import (
     PrepareArtifactSourcesArgs,
     RemoteExecuteWithFallbackArgs,
     RemoteStageArtifactsArgs,
-    handle_package_probe_credentials,
     handle_prepare_artifact_sources,
     handle_remote_execute_with_fallback,
     handle_remote_stage_artifacts,
@@ -144,12 +143,14 @@ def _summarize_tool_result(result: Any) -> dict[str, Any]:
         if isinstance(value, str) and value.strip():
             summary[key] = value.strip()
 
-    machine_options = result.get("machine_options")
-    if isinstance(machine_options, list):
-        summary["machine_option_count"] = len(machine_options)
-        summary["machine_option_values"] = [
+    options = result.get("options")
+    if not isinstance(options, list):
+        options = result.get("machine_options")
+    if isinstance(options, list):
+        summary["option_count"] = len(options)
+        summary["option_values"] = [
             str(item.get("value") or "").strip()
-            for item in machine_options[:20]
+            for item in options[:20]
             if isinstance(item, dict) and str(item.get("value") or "").strip()
         ]
 
@@ -405,13 +406,6 @@ def _build_remote_tool_definitions() -> list[ToolDefinition]:
 
 def _build_package_tool_definitions() -> list[ToolDefinition]:
     return [
-        ToolDefinition(
-            name="package_probe_credentials",
-            description="探测部署包是否支持 --user / --password 参数。",
-            args_schema=RemotePathArgs,
-            handler=handle_package_probe_credentials,
-            module="package",
-        ),
         ToolDefinition(
             name="prepare_artifact_sources",
             description="通用地准备一个或多个安装包来源，支持本地上传和文件服务器路径。",

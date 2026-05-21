@@ -36,6 +36,13 @@
 #   - 人类可读标题，展示在页面或日志中
 # - root：
 #   - 推荐写法，行为树根节点
+# - context_schema：
+#   - 可选，声明这个 workflow 共享的上下文字段
+#   - 推荐给所有会跨节点传值的参数都显式声明
+#   - source 目前推荐：
+#     - `input`：流程启动时传入
+#     - `runtime`：节点执行过程中生成
+#     - `confirmation`：用户确认后写入
 # - script：
 #   - 旧兼容字段
 #   - 老 playbook 还可以继续使用，但新增 playbook 默认不要再写 `script`
@@ -104,13 +111,19 @@
 #     - `remote_remove_files_by_prefix`
 #     - `docker_compose_exec_command`
 #     - `ros_compose_exec_command`
-#     - `package_probe_credentials`
 #     - `package_install`
 # - arguments：
 #   - 传给工具的参数对象
 #   - 如果参数要引用上下文，推荐：
 #     - `from_context`
 #     - `{{ context_field_name }}`
+#   - 推荐所有 `from_context` 引用的字段都先在 `context_schema` 中声明
+# - result_mapping：
+#   - 可选，将工具返回结果中的字段自动写入 workflow context
+#   - 例如：
+#     - `options: package_options`
+#     - `inferred_value: selected_option`
+#   - 推荐所有映射目标字段也先在 `context_schema` 中声明
 # - assert_ref：
 #   - 引用同目录 `rules.yaml` 中的通用规则 id
 # - assert：
@@ -136,6 +149,10 @@
 #   - `approve` / `input` / `select`
 # - confirmation.output.store_as：
 #   - 确认结果保存到哪个上下文字段里
+#   - 推荐对应字段在 `context_schema` 中声明为 `source: confirmation`
+# - confirmation.input.options_source.from_context：
+#   - select 确认时可直接从 workflow context 里的列表字段取选项
+#   - 推荐配合 `result_mapping` 一起使用
 #
 # 行为树写法建议：
 # - “先看是否已正常，否则恢复”：
@@ -158,6 +175,13 @@ description: <playbook description>
 playbooks:
   - id: <playbook_id>
     title: <human readable title>
+    context_schema:
+      selected_option:
+        type: string
+        source: confirmation
+      option_candidates:
+        type: option_list
+        source: runtime
     root:
       type: sequence | selector
       name: <root_node_name>
@@ -172,6 +196,8 @@ playbooks:
             #   from_context: <context field name>
             # 或：
             # key: "{{ context_field_name }}"
+          result_mapping:
+            options: option_candidates
           assert_ref: <rule_id>
           failure_message: <human readable failure message>
           success_message: <optional success message>
@@ -193,11 +219,13 @@ playbooks:
                 - label: <option label>
                   value: <option value>
               options_source:
-                field: <tool result field>
-                parser: string_list
-                list_key: <list field name>
+                from_context: option_candidates
+                # 兼容旧写法时也可以从当前步骤结果里取：
+                # field: raw_result
+                # parser: string_list
+                # list_key: options
             output:
-              store_as: <context field name>
+              store_as: selected_option
               type: raw_input | boolean | selected_option_value | selected_option_label | selected_option_index
         - type: call_playbook
           name: <call_node_name>

@@ -13,6 +13,9 @@ _CONTEXT_REF_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
 _TRUE_TEXTS = {"1", "true", "yes", "y", "ok", "confirm", "是", "确认", "同意", "允许", "可以", "继续", "好"}
 _FALSE_TEXTS = {"0", "false", "no", "n", "cancel", "否", "拒绝", "不同意", "不允许", "不可以", "停止"}
 MAX_CHAT_HISTORY_TURNS = 3
+PLAYBOOK_CONTEXT_KEY = "playbook_context"
+PLAYBOOK_CONTEXT_KEYS_KEY = "playbook_context_keys"
+RUNTIME_CONTEXT_KEY = "runtime_context"
 
 
 def _get_value_by_path(payload: Any, field: str) -> tuple[bool, Any]:
@@ -39,6 +42,10 @@ def _get_value_by_path(payload: Any, field: str) -> tuple[bool, Any]:
 
 
 def get_session(tool_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    runtime_context = get_runtime_context(tool_context)
+    session = runtime_context.get("session") if isinstance(runtime_context, dict) else None
+    if isinstance(session, dict):
+        return session
     session = (tool_context or {}).get("session")
     if isinstance(session, dict):
         return session
@@ -49,7 +56,42 @@ def get_session(tool_context: dict[str, Any] | None) -> dict[str, Any] | None:
 def get_session_id(tool_context: dict[str, Any] | None) -> str:
     if not isinstance(tool_context, dict):
         return ""
-    return str(tool_context.get("session_id") or "").strip()
+    runtime_context = get_runtime_context(tool_context)
+    return str(runtime_context.get("session_id") or tool_context.get("session_id") or "").strip()
+
+
+def get_runtime_context(tool_context: dict[str, Any] | None, *, create: bool = False) -> dict[str, Any]:
+    if not isinstance(tool_context, dict):
+        return {}
+    runtime_context = tool_context.get(RUNTIME_CONTEXT_KEY)
+    if isinstance(runtime_context, dict):
+        return runtime_context
+    if not create:
+        return {}
+    runtime_context = {}
+    tool_context[RUNTIME_CONTEXT_KEY] = runtime_context
+    return runtime_context
+
+
+def get_runtime_value(tool_context: dict[str, Any] | None, key: str) -> Any:
+    normalized_key = str(key or "").strip()
+    if not normalized_key:
+        return None
+    runtime_context = get_runtime_context(tool_context)
+    if normalized_key in runtime_context:
+        return runtime_context.get(normalized_key)
+    if not isinstance(tool_context, dict):
+        return None
+    return tool_context.get(normalized_key)
+
+
+def set_runtime_value(tool_context: dict[str, Any] | None, key: str, value: Any) -> None:
+    normalized_key = str(key or "").strip()
+    if not normalized_key or not isinstance(tool_context, dict):
+        return
+    runtime_context = get_runtime_context(tool_context, create=True)
+    runtime_context[normalized_key] = value
+    tool_context[normalized_key] = value
 
 
 def get_chat_state(tool_context: dict[str, Any] | None) -> dict[str, Any]:
@@ -180,16 +222,16 @@ def store_playbook_input(tool_context: dict[str, Any] | None, key: str, value: A
         return
     playbook_inputs = get_playbook_inputs(tool_context)
     playbook_inputs[normalized_key] = value
-    if isinstance(tool_context, dict):
-        tool_context[normalized_key] = value
+    set_context_value(tool_context, normalized_key, value)
 
 
 def get_playbook_input(tool_context: dict[str, Any] | None, key: str) -> Any:
     normalized_key = str(key or "").strip()
     if not normalized_key:
         return None
-    if isinstance(tool_context, dict) and normalized_key in tool_context:
-        return tool_context.get(normalized_key)
+    value = get_context_value(tool_context, normalized_key)
+    if value is not None:
+        return value
     return get_playbook_inputs(tool_context).get(normalized_key)
 
 
@@ -199,6 +241,9 @@ def clear_playbook_input(tool_context: dict[str, Any] | None, key: str) -> None:
         return
     get_playbook_inputs(tool_context).pop(normalized_key, None)
     if isinstance(tool_context, dict):
+        playbook_context = tool_context.get(PLAYBOOK_CONTEXT_KEY)
+        if isinstance(playbook_context, dict):
+            playbook_context.pop(normalized_key, None)
         tool_context.pop(normalized_key, None)
 
 
@@ -286,10 +331,80 @@ def resolve_pending_confirmation_reply(
     }
 
 
+def get_playbook_context(tool_context: dict[str, Any] | None, *, create: bool = False) -> dict[str, Any]:
+    if not isinstance(tool_context, dict):
+        return {}
+    playbook_context = tool_context.get(PLAYBOOK_CONTEXT_KEY)
+    if isinstance(playbook_context, dict):
+        return playbook_context
+    if not create:
+        return {}
+    playbook_context = {}
+    tool_context[PLAYBOOK_CONTEXT_KEY] = playbook_context
+    return playbook_context
+
+
+def get_declared_playbook_context_keys(tool_context: dict[str, Any] | None) -> set[str]:
+    if not isinstance(tool_context, dict):
+        return set()
+    raw_keys = tool_context.get(PLAYBOOK_CONTEXT_KEYS_KEY)
+    if not isinstance(raw_keys, list):
+        return set()
+    return {str(item or "").strip() for item in raw_keys if str(item or "").strip()}
+
+
+def set_context_value(tool_context: dict[str, Any] | None, key: str, value: Any) -> None:
+    normalized_key = str(key or "").strip()
+    if not normalized_key or not isinstance(tool_context, dict):
+        return
+    playbook_context = get_playbook_context(tool_context, create=True)
+    declared_keys = get_declared_playbook_context_keys(tool_context)
+    if playbook_context or normalized_key in declared_keys:
+        playbook_context[normalized_key] = value
+    tool_context[normalized_key] = value
+
+
+def sync_playbook_context_view(tool_context: dict[str, Any] | None) -> None:
+    if not isinstance(tool_context, dict):
+        return
+    playbook_context = get_playbook_context(tool_context)
+    for key, value in playbook_context.items():
+        tool_context[str(key)] = value
+
+
+def sync_playbook_context_from_tool_context(tool_context: dict[str, Any] | None) -> None:
+    if not isinstance(tool_context, dict):
+        return
+    declared_keys = get_declared_playbook_context_keys(tool_context)
+    if not declared_keys:
+        return
+    playbook_context = get_playbook_context(tool_context, create=True)
+    for key in declared_keys:
+        if key in tool_context:
+            playbook_context[key] = tool_context.get(key)
+
+
 def get_context_value(tool_context: dict[str, Any] | None, key: str) -> Any:
     if not isinstance(tool_context, dict):
         return None
-    return tool_context.get(str(key or "").strip())
+    normalized_key = str(key or "").strip()
+    if not normalized_key:
+        return None
+    playbook_context = get_playbook_context(tool_context)
+    if normalized_key in playbook_context:
+        return playbook_context.get(normalized_key)
+    return tool_context.get(normalized_key)
+
+
+def get_nested_context_value(tool_context: dict[str, Any] | None, key: str) -> tuple[bool, Any]:
+    normalized_key = str(key or "").strip()
+    if not normalized_key:
+        return False, None
+    playbook_context = get_playbook_context(tool_context)
+    found, value = _get_value_by_path(playbook_context, normalized_key)
+    if found:
+        return True, value
+    return _get_value_by_path(tool_context or {}, normalized_key)
 
 
 def expand_context_references(value: Any, tool_context: dict[str, Any] | None) -> Any:
@@ -362,6 +477,7 @@ def get_confirmation_request(
     if mode == "select":
         request_input["options"] = _resolve_confirmation_options(
             input_spec,
+            tool_context=tool_context,
             step_result=step_result,
         )
     effective_confirmation = dict(confirmation)
@@ -385,6 +501,7 @@ def get_confirmation_request(
 def _resolve_confirmation_options(
     input_spec: dict[str, Any],
     *,
+    tool_context: dict[str, Any] | None = None,
     step_result: dict[str, Any] | None = None,
 ) -> list[Any]:
     direct_options = input_spec.get("options")
@@ -394,6 +511,17 @@ def _resolve_confirmation_options(
     options_source = input_spec.get("options_source") if isinstance(input_spec.get("options_source"), dict) else {}
     if not options_source:
         return []
+    context_key = str(options_source.get("from_context") or "").strip()
+    if context_key:
+        found, value = get_nested_context_value(tool_context, context_key)
+        if not found:
+            return []
+        list_key = str(options_source.get("list_key") or "").strip()
+        if list_key:
+            found, nested_value = _get_value_by_path(value, list_key)
+            if found:
+                value = nested_value
+        return value if isinstance(value, list) else []
     source_field = str(options_source.get("field") or "raw_result").strip() or "raw_result"
     source_parser = str(options_source.get("parser") or "").strip().lower()
     list_key = str(options_source.get("list_key") or "").strip()
@@ -567,5 +695,5 @@ def apply_confirmation_response(
     store_as = str(output_spec.get("store_as") or "").strip()
     if not store_as:
         return updated
-    updated[store_as] = resolve_confirmation_value(request, response_text)
+    set_context_value(updated, store_as, resolve_confirmation_value(request, response_text))
     return updated

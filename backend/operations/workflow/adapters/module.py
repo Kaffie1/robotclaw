@@ -5,13 +5,14 @@ from ....core.models import TaskFailure
 from ....common import log_command_result
 from ...services import current_robot_password, ensure_client_connected, robot_identity
 from ....infra.stores import TaskContext
+from ....shared.confirmation import get_context_value, set_runtime_value
 from ..common import find_playbook_step
 from ..task_support import build_workflow_status_reporter, first_failed_message, log_playbook_steps
 
 
 def _build_module_playbook_status_reporter(ctx: TaskContext, *, upload_token: str, tool_context: dict[str, Any]) -> Any:
     def progress_transformer(progress_info: dict[str, str], active_tool_context: dict[str, Any]) -> dict[str, str]:
-        package_sources = (active_tool_context or {}).get("package_sources")
+        package_sources = get_context_value(active_tool_context, "package_sources")
         if progress_info["step_name"] == "prepare_module_packages" and any(
             isinstance(item, dict) and str(item.get("source_kind") or "").strip() == "file_server"
             for item in (package_sources if isinstance(package_sources, list) else [])
@@ -20,7 +21,7 @@ def _build_module_playbook_status_reporter(ctx: TaskContext, *, upload_token: st
         return progress_info
 
     def total_bytes_getter(active_tool_context: dict[str, Any]) -> int | None:
-        package_files = (active_tool_context or {}).get("package_files")
+        package_files = get_context_value(active_tool_context, "package_files")
         if not isinstance(package_files, list):
             return None
         return sum(len(item.get("package_file_bytes") or b"") for item in package_files if isinstance(item, dict))
@@ -46,6 +47,7 @@ def create_module_workflow_task_runner(
     up_wait_seconds: int = 10,
     auto_deploy: bool = False,
     owner_id: str = "",
+    include_tree_state: bool = False,
 ):
     client = ensure_client_connected(session)
     identity = robot_identity(session)
@@ -108,6 +110,7 @@ def create_module_workflow_task_runner(
             "up_wait_seconds": max(int(up_wait_seconds or 0), 0),
             "sudo_password": sudo_password,
         }
+        set_runtime_value(workflow_context, "upload_token", upload_token)
         try:
             from ....playbooks import run_scripted_playbook_by_id
 
@@ -115,6 +118,7 @@ def create_module_workflow_task_runner(
                 "module-deploy",
                 workflow_context,
                 workflow_type="normal",
+                include_tree_state=include_tree_state,
                 status_reporter=_build_module_playbook_status_reporter(
                     ctx,
                     upload_token=upload_token,
@@ -124,6 +128,9 @@ def create_module_workflow_task_runner(
             summary["workflow_id"] = "module-deploy"
             summary["workflow_type"] = "normal"
             summary["workflow_result"] = playbook_result or {}
+            if include_tree_state and isinstance(playbook_result, dict):
+                summary["workflow_tree_state"] = playbook_result.get("tree_state")
+                summary["workflow_node_states"] = playbook_result.get("node_states") or {}
             history["workflow_id"] = "module-deploy"
             history["workflow_type"] = "normal"
             if not isinstance(playbook_result, dict):

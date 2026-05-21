@@ -5,6 +5,35 @@ playbooks:
   - id: package-deploy
     type: normal
     title: 整包部署
+    # context_schema 用来显式声明这个 workflow 会跨节点共享的上下文字段。
+    # 约定：
+    # - input：流程启动时传入
+    # - runtime：节点执行过程中生成
+    # - confirmation：用户确认后写入
+    context_schema:
+      # 安装包来源与任务级输入
+      source_metadata: { type: object, source: input }
+      upload_token: { type: string, source: input }
+      cleanup_existing_remote_files: { type: boolean, source: input }
+
+      # 目标设备与部署目标
+      device_type: { type: string, source: input }
+      remote_deb_path: { type: string, source: input }
+
+      # 目标凭证：用于需要带目标账号密码执行的安装命令
+      target_username: { type: string, source: input }
+      target_password: { type: string, source: input }
+
+      # 安装包准备节点产出的运行时字段
+      file_name: { type: string, source: runtime }
+      file_bytes: { type: bytes, source: runtime }
+
+      # 选项探测节点产出的运行时字段
+      package_options: { type: option_list, source: runtime }
+      inferred_option: { type: string, source: runtime }
+
+      # 用户确认后写回的最终部署参数
+      machine_type: { type: string, source: confirmation }
     task_progress:
       default_phase: preparing
       waiting_confirmation_phase: waiting_confirmation
@@ -68,11 +97,11 @@ playbooks:
           assert_ref: rule_1
           failure_message: 远端安装包不存在，请先上传安装包或确认路径正确
         - type: action
-          name: probe_package_machine_types
-          display_name: 识别整包支持的机型
+          name: probe_package_options
+          display_name: 探测整包可选参数
           progress:
-            phase: probing_machine_type
-            message: 正在识别整包支持的机型
+            phase: probing_options
+            message: 正在探测整包可选参数
           tool_name: remote_execute_with_fallback
           arguments:
             device_type:
@@ -81,7 +110,7 @@ playbooks:
             command_args:
               deb_path:
                 from_context: remote_deb_path
-            parse_mode: machine_options
+            parse_mode: options
             on_failure: use_fallback
             fallback_value:
               - { value: "H1",       label: "H1" }
@@ -96,6 +125,11 @@ playbooks:
               - { value: "WA2_TY20", label: "WA2_TY20" }
               - { value: "WA2_L",    label: "WA2_L" }
               - { value: "U1_WA1",   label: "U1_WA1" }
+          # 将工具返回的通用 options / inferred_value 自动写回 workflow context，
+          # 后面的确认节点和安装节点都直接从 context 取值。
+          result_mapping:
+            options: package_options
+            inferred_value: inferred_option
           require_confirmation: true
           confirmation:
             when: after
@@ -103,14 +137,17 @@ playbooks:
             message: 请选择这次整包部署的目标机型
             progress:
               phase: waiting_confirmation
-              message: 等待选择整包部署目标机型
+              message: 等待选择整包部署参数
             input:
               type: index
               auto_select_if_single: false
               options_source:
-                field: raw_result
-                list_key: machine_options
+                # 选项直接从 workflow context 里的 package_options 读取，
+                # 不再依赖当前步骤 raw_result 的固定结构。
+                from_context: package_options
             output:
+              # 用户最终选择的值会写回 context.machine_type，
+              # 后续安装命令继续通过 from_context 引用它。
               store_as: machine_type
               type: selected_option_value
         - type: action
@@ -149,6 +186,10 @@ playbooks:
                 from_context: target_username
               target_password:
                 from_context: target_password
+            target_credentials_probe:
+              removable_args:
+                - "--user={target_username}"
+                - "--password={target_password}"
             parse_mode: command_result
             on_failure: return_raw
             timeout_seconds: 1800
@@ -156,14 +197,14 @@ playbooks:
           failure_message: 安装命令执行失败，请查看安装包输出和目标环境
     escalation_notes:
       - "整包部署会先在任务内准备安装包来源，再上传到目标处理器执行安装"
-      - "如果安装包本身不支持当前机型，先重新确认机型或更换安装包"
+      - "如果安装包本身不支持当前选项，先重新确认部署参数或更换安装包"
     execution_notes:
       - "这是第一版部署行为树，目标是先打通整包部署编排链路"
       - "安装前会先通过共享的来源准备节点处理本地上传或文件服务器输入"
       - "安装前会先通过共享的远端上传节点把安装包放到目标路径"
       - "安装前会先修复安装包执行权限"
-      - "安装前会先通过通用命令执行节点调用 support_robot_types 识别安装包支持的机型"
-      - "机型探测节点会在 workflow 参数里声明失败策略，当前失败时回退到默认机型列表"
+      - "安装前会先通过通用命令执行节点调用 support_robot_types 探测安装包支持的可选参数"
+      - "选项探测节点会在 workflow 参数里声明失败策略，当前失败时回退到默认选项列表"
       - "安装阶段也通过通用命令执行节点下发 install command，并由 workflow 声明失败策略与超时时间"
       - "当前版本把探测命令和安装命令直接声明在 workflow 参数里，tool 只消费这些参数"
       - "当前固定部署到 ORIN，不处理 PICO 和跳板部署"

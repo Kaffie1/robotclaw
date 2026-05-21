@@ -11,6 +11,7 @@ from ..common import (
     logger,
 )
 from ..rules import evaluate_step_assertion
+from ..shared.confirmation import set_context_value, sync_playbook_context_from_tool_context, sync_playbook_context_view
 from ..tools import tool_registry
 from .schema import validate_playbook_spec
 
@@ -59,6 +60,22 @@ def tool_call(tool_name: str, arguments: dict[str, Any], tool_context: dict[str,
     }
 
 
+def apply_result_mapping(node_spec: dict[str, Any], raw_result: Any, tool_context: dict[str, Any] | None) -> list[str]:
+    if not isinstance(node_spec.get("result_mapping"), dict) or not isinstance(tool_context, dict) or not isinstance(raw_result, dict):
+        return []
+    mapped_keys: list[str] = []
+    for result_key, context_key in (node_spec.get("result_mapping") or {}).items():
+        normalized_result_key = str(result_key or "").strip()
+        normalized_context_key = str(context_key or "").strip()
+        if not normalized_result_key or not normalized_context_key:
+            continue
+        if normalized_result_key not in raw_result:
+            continue
+        set_context_value(tool_context, normalized_context_key, raw_result.get(normalized_result_key))
+        mapped_keys.append(normalized_context_key)
+    return mapped_keys
+
+
 def run_script_step(step: dict[str, Any], tool_context: dict[str, Any] | None) -> dict[str, Any]:
     name = str(step.get("name") or step.get("tool_name") or "").strip()
     tool_name = str(step.get("tool_name") or "").strip()
@@ -72,6 +89,9 @@ def run_script_step(step: dict[str, Any], tool_context: dict[str, Any] | None) -
         time.sleep(wait_seconds)
     result = tool_call(tool_name, arguments, tool_context)
     raw_result = result.get("result", {})
+    mapped_context_keys = apply_result_mapping(step, raw_result, tool_context)
+    sync_playbook_context_from_tool_context(tool_context)
+    sync_playbook_context_view(tool_context)
     nested_result = raw_result.get("result", {}) if isinstance(raw_result, dict) and isinstance(raw_result.get("result"), dict) else raw_result
     assertion_payload = {
         **(raw_result if isinstance(raw_result, dict) else {}),
@@ -98,6 +118,8 @@ def run_script_step(step: dict[str, Any], tool_context: dict[str, Any] | None) -
         "passed": passed,
         "failure_message": str(step.get("failure_message") or "").strip(),
     }
+    if mapped_context_keys:
+        step_result["mapped_context_keys"] = mapped_context_keys
     append_fault_trace("playbook_step_result", step_result)
     return step_result
 
@@ -193,6 +215,8 @@ def execute_playbook(
     max_depth: int = 4,
     resume_state: dict[str, Any] | None = None,
     status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
+    tree_status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
+    include_tree_state: bool = False,
 ) -> dict[str, Any]:
     from .bt_executor import execute_tree_playbook
 
@@ -205,4 +229,6 @@ def execute_playbook(
         max_depth=max_depth,
         resume_state=resume_state,
         status_reporter=status_reporter,
+        tree_status_reporter=tree_status_reporter,
+        include_tree_state=include_tree_state,
     )

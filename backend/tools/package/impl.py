@@ -8,7 +8,7 @@ from typing import Any
 
 from ...common import extract_package_prefix, get_runtime_logger, render_remote_command
 from ...core.config import PACKAGE_DEPLOY_DIR
-from ...operations.workflow import probe_remote_package_supports_credentials, render_package_install_command
+from ...operations.workflow import probe_remote_package_supports_credentials
 from ...shared.files import materialize_package_bytes_from_source
 from ...shared.runtime import upload_progress_manager
 from ..common import build_command_output_text
@@ -47,6 +47,8 @@ def prepare_artifact_sources(
     *,
     upload_token: str,
 ) -> dict[str, Any]:
+    """准备部署安装包来源信息列表，支持文件服务器路径和本地上传两种来源，
+        每个来源项会解析出文件名、字节内容等元信息，必要时从文件服务器下载到本地临时目录。"""
     normalized_items = _normalize_source_items(source_items)
     if not normalized_items:
         raise ValueError("缺少可用的安装包来源")
@@ -114,17 +116,6 @@ def prepare_artifact_sources(
             for item in prepared_items
         ],
     }
-
-
-def package_probe_credentials(client, path: str) -> dict[str, str | bool]:
-    resolved_path = client.resolve_remote_path(path)
-    supported = probe_remote_package_supports_credentials(client, resolved_path)
-    return {
-        "path": path,
-        "resolved_path": resolved_path,
-        "supports_target_credentials": supported,
-    }
-
 
 def remote_stage_artifacts(
     client,
@@ -309,7 +300,7 @@ def remote_stage_artifacts(
     }
 
 
-def _parse_machine_options_from_output(output: str) -> list[dict[str, str]]:
+def _parse_options_from_output(output: str) -> list[dict[str, str]]:
     normalized = str(output or "").replace("\r", "\n")
     try:
         parsed = json.loads(normalized)
@@ -334,20 +325,20 @@ def _parse_machine_options_from_output(output: str) -> list[dict[str, str]]:
     return options
 
 
-def _extract_machine_type_from_probe_logs(output: str) -> str:
+def _extract_inferred_option_from_probe_logs(output: str) -> str:
     match = re.search(r"global=([A-Za-z0-9_]+)", str(output or ""))
     if not match:
         return ""
     return str(match.group(1) or "").strip()
 
 
-def _filter_machine_options(
+def _filter_options_by_fallback(
     parsed_options: list[dict[str, str]],
-    fallback_machine_options: list[dict[str, str]],
+    fallback_options: list[dict[str, str]],
 ) -> list[dict[str, str]]:
     allowed_values = {
         str(option.get("value") or "").strip()
-        for option in fallback_machine_options
+        for option in fallback_options
         if isinstance(option, dict) and str(option.get("value") or "").strip()
     }
     if not allowed_values:
@@ -366,7 +357,7 @@ def _filter_machine_options(
     return normalized
 
 
-def _normalize_fallback_machine_options(fallback_value: Any) -> list[dict[str, str]]:
+def _normalize_fallback_options(fallback_value: Any) -> list[dict[str, str]]:
     return [
         {
             "value": str(option.get("value") or "").strip(),
@@ -375,7 +366,6 @@ def _normalize_fallback_machine_options(fallback_value: Any) -> list[dict[str, s
         for option in (fallback_value or [])
         if isinstance(option, dict) and str(option.get("value") or "").strip()
     ]
-
 
 def _resolve_primary_remote_path(client, command_args: dict[str, Any]) -> str:
     for key in ("deb_path", "remote_path", "path", "package_path"):
@@ -391,12 +381,25 @@ def _resolve_primary_remote_path(client, command_args: dict[str, Any]) -> str:
     raise ValueError("命令参数中缺少可用于渲染的远端路径")
 
 
-def _command_needs_target_credentials(command_template: str) -> bool:
+def _normalize_target_credentials_probe(probe_config: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(probe_config, dict):
+        return None
+    removable_args = [
+        str(item or "").strip()
+        for item in (probe_config.get("removable_args") or [])
+        if str(item or "").strip()
+    ]
+    if not removable_args:
+        return None
+    return {"removable_args": removable_args}
+
+
+def _strip_command_args(command_template: str, removable_args: list[str]) -> str:
     normalized_template = str(command_template or "")
-    return any(
-        marker in normalized_template
-        for marker in ("{target_username}", "{target_password}", "--user=", "--password=")
-    )
+    for arg in removable_args:
+        normalized_template = normalized_template.replace(f" {arg}", " ")
+        normalized_template = normalized_template.replace(arg, "")
+    return re.sub(r"\s{2,}", " ", normalized_template).strip()
 
 
 def _render_execution_command(
@@ -408,8 +411,10 @@ def _render_execution_command(
     device_type: str,
     target_username: str,
     target_password: str,
+    target_credentials_probe: dict[str, Any] | None,
 ) -> tuple[str, bool | None]:
-    if not _command_needs_target_credentials(command_template):
+    normalized_probe = _normalize_target_credentials_probe(target_credentials_probe)
+    if not normalized_probe:
         return (
             render_remote_command(
                 str(command_template or ""),
@@ -421,14 +426,22 @@ def _render_execution_command(
         )
 
     supports_target_credentials = probe_remote_package_supports_credentials(client, resolved_path)
-    rendered_command = render_package_install_command(
-        str(command_template or ""),
+    effective_command_template = str(command_template or "")
+    if not supports_target_credentials:
+        effective_command_template = _strip_command_args(
+            effective_command_template,
+            list(normalized_probe.get("removable_args") or []),
+        )
+    rendered_command = render_remote_command(
+        effective_command_template,
         resolved_path,
-        machine_type=str(command_args.get("machine_type") or "").strip(),
-        device_type=str(device_type or "").upper(),
-        target_username=str(target_username or ""),
-        target_password=str(target_password or ""),
-        include_target_credentials=supports_target_credentials,
+        {
+            **dict(command_args or {}),
+            "device_type": str(device_type or "").upper(),
+            "target_username": str(target_username or ""),
+            "target_password": str(target_password or ""),
+        },
+        append_remote_path_if_missing=False,
     )
     return rendered_command, supports_target_credentials
 
@@ -453,33 +466,33 @@ def _execute_command_with_failure_policy(
         return {"exit_code": 1, "stdout": "", "stderr": str(exc)}
 
 
-def _build_machine_options_payload(
+def _build_options_payload(
     result: dict[str, Any],
     output: str,
     *,
     on_failure: str,
     fallback_value: Any,
 ) -> dict[str, Any]:
-    fallback_options = _normalize_fallback_machine_options(fallback_value)
-    parsed_options = _filter_machine_options(_parse_machine_options_from_output(output), fallback_options)
-    inferred_machine_type = _extract_machine_type_from_probe_logs(output)
+    fallback_options = _normalize_fallback_options(fallback_value)
+    parsed_options = _filter_options_by_fallback(_parse_options_from_output(output), fallback_options)
+    inferred_value = _extract_inferred_option_from_probe_logs(output)
     warning = ""
-    machine_options = parsed_options
+    options = parsed_options
 
     if int(result.get("exit_code") or 0) != 0:
         if on_failure == "use_fallback":
-            machine_options = fallback_options
-            warning = "机型探测命令执行失败，已回退到默认机型列表，请确认后继续部署"
-    elif not machine_options and inferred_machine_type:
-        machine_options = fallback_options or [{"value": inferred_machine_type, "label": inferred_machine_type}]
-        warning = f"安装包探测命令未返回标准机型列表，已根据安装包日志识别机型为 {inferred_machine_type}"
-    elif not machine_options and on_failure == "use_fallback":
-        machine_options = fallback_options
-        warning = "安装包未返回可选机型，已回退到默认机型列表，请确认后继续部署"
+            options = fallback_options
+            warning = "选项探测命令执行失败，已回退到默认选项列表，请确认后继续部署"
+    elif not options and inferred_value:
+        options = fallback_options or [{"value": inferred_value, "label": inferred_value}]
+        warning = f"探测命令未返回标准选项列表，已根据日志识别为 {inferred_value}"
+    elif not options and on_failure == "use_fallback":
+        options = fallback_options
+        warning = "命令未返回可选项，已回退到默认选项列表，请确认后继续部署"
 
     return {
-        "machine_options": machine_options,
-        "inferred_machine_type": inferred_machine_type,
+        "options": options,
+        "inferred_value": inferred_value,
         "warning": warning,
     }
 
@@ -505,9 +518,9 @@ def _build_execute_payload(
     }
     if supports_target_credentials is not None:
         payload["supports_target_credentials"] = supports_target_credentials
-    if parse_mode == "machine_options":
+    if parse_mode in {"options", "machine_options"}:
         payload.update(
-            _build_machine_options_payload(
+            _build_options_payload(
                 result,
                 output,
                 on_failure=on_failure,
@@ -531,6 +544,7 @@ def remote_execute_with_fallback(
     device_type: str,
     target_username: str,
     target_password: str,
+    target_credentials_probe: dict[str, Any] | None = None,
     output_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     normalized_command_args = dict(command_args or {})
@@ -545,6 +559,7 @@ def remote_execute_with_fallback(
         device_type=str(device_type or "").upper(),
         target_username=str(target_username or ""),
         target_password=str(target_password or ""),
+        target_credentials_probe=target_credentials_probe,
     )
     result = _execute_command_with_failure_policy(
         client,

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from ...core.models import ApiError
 from ...operations.services import current_robot_password
+from ...shared.confirmation import get_context_value, get_runtime_value, set_context_value
 from ..base import ToolRuntime, connected_tool
 from .impl import (
     module_health_check,
@@ -56,13 +57,13 @@ class ModuleHealthCheckArgs(BaseModel):
 
 @connected_tool
 def handle_module_prepare_packages(args: ModulePreparePackagesArgs, runtime: ToolRuntime) -> dict[str, Any]:
-    package_sources = (runtime.tool_context or {}).get("package_sources")
+    package_sources = get_context_value(runtime.tool_context, "package_sources")
     if not isinstance(package_sources, list) or not package_sources:
         raise ApiError("模块部署上下文缺少安装包来源列表")
-    upload_token = str((runtime.tool_context or {}).get("upload_token") or "").strip()
+    upload_token = str(get_runtime_value(runtime.tool_context, "upload_token") or "").strip()
     result = module_prepare_packages(package_sources, upload_token=upload_token)
     if isinstance(runtime.tool_context, dict):
-        runtime.tool_context["package_files"] = result.get("package_files")
+        set_context_value(runtime.tool_context, "package_files", result.get("package_files"))
     return {
         "package_count": int(result.get("package_count") or 0),
         "total_bytes": int(result.get("total_bytes") or 0),
@@ -83,10 +84,10 @@ def handle_module_replace_remote_assets(args: ModuleReplaceRemoteAssetsArgs, run
 
 @connected_tool
 def handle_module_stage_packages(args: ModuleStagePackagesArgs, runtime: ToolRuntime) -> dict[str, Any]:
-    package_files = (runtime.tool_context or {}).get("package_files")
+    package_files = get_context_value(runtime.tool_context, "package_files")
     if not isinstance(package_files, list) or not package_files:
         raise ApiError("模块部署上下文缺少已准备的安装包列表")
-    upload_token = str((runtime.tool_context or {}).get("upload_token") or "").strip()
+    upload_token = str(get_runtime_value(runtime.tool_context, "upload_token") or "").strip()
     result = module_stage_packages(
         runtime.client,
         module_name=args.module_name,
@@ -97,13 +98,13 @@ def handle_module_stage_packages(args: ModuleStagePackagesArgs, runtime: ToolRun
         sudo_password=current_robot_password(runtime.session),
     )
     if isinstance(runtime.tool_context, dict):
-        runtime.tool_context["uploaded_file_paths"] = result.get("uploaded_file_paths") or []
+        set_context_value(runtime.tool_context, "uploaded_file_paths", result.get("uploaded_file_paths") or [])
     return result
 
 
 @connected_tool
 def handle_module_install(args: ModuleInstallArgs, runtime: ToolRuntime) -> dict[str, Any]:
-    uploaded_file_paths = (runtime.tool_context or {}).get("uploaded_file_paths")
+    uploaded_file_paths = get_context_value(runtime.tool_context, "uploaded_file_paths")
     if not isinstance(uploaded_file_paths, list):
         raise ApiError("模块部署上下文缺少上传结果")
     result = module_install(
@@ -114,8 +115,8 @@ def handle_module_install(args: ModuleInstallArgs, runtime: ToolRuntime) -> dict
         uploaded_file_paths=uploaded_file_paths,
     )
     if isinstance(runtime.tool_context, dict):
-        runtime.tool_context["compose_profiles"] = str(result.get("compose_profiles") or "")
-        runtime.tool_context["install_command"] = str(result.get("install_command") or "")
+        set_context_value(runtime.tool_context, "compose_profiles", str(result.get("compose_profiles") or ""))
+        set_context_value(runtime.tool_context, "install_command", str(result.get("install_command") or ""))
     return result
 
 

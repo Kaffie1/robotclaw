@@ -8,6 +8,7 @@ import py_trees
 
 from ..core.models import ApiError
 from ..rules import build_playbook_rule_context
+from ..shared.confirmation import PLAYBOOK_CONTEXT_KEY, PLAYBOOK_CONTEXT_KEYS_KEY, RUNTIME_CONTEXT_KEY, sync_playbook_context_view
 from .executor import (
     PlaybookConfirmationRequired,
     execute_playbook,
@@ -27,6 +28,87 @@ def _normalize_status(value: str) -> py_trees.common.Status:
     return py_trees.common.Status.FAILURE
 
 
+def _is_descendant_node_path(node_path: str, descendant_path: str) -> bool:
+    normalized_node_path = str(node_path or "").strip()
+    normalized_descendant_path = str(descendant_path or "").strip()
+    return bool(normalized_node_path and normalized_descendant_path and normalized_descendant_path.startswith(f"{normalized_node_path}."))
+
+
+def _build_node_status(
+    node_path: str,
+    completed_nodes: dict[str, dict[str, Any]],
+    active_node_path: str,
+    pending_confirmation: dict[str, Any] | None,
+) -> str:
+    pending_node_path = str((pending_confirmation or {}).get("node_path") or "").strip()
+    if pending_node_path == node_path:
+        return "waiting_confirmation"
+    if active_node_path == node_path:
+        return "running"
+    completed = completed_nodes.get(node_path)
+    if isinstance(completed, dict):
+        return "success" if bool(completed.get("passed")) else "failure"
+    if pending_node_path and _is_descendant_node_path(node_path, pending_node_path):
+        return "running"
+    if active_node_path and _is_descendant_node_path(node_path, active_node_path):
+        return "running"
+    return "idle"
+
+
+def _build_tree_state(
+    node_spec: dict[str, Any],
+    *,
+    node_path: str,
+    completed_nodes: dict[str, dict[str, Any]],
+    active_node_path: str,
+    active_node_message: str,
+    pending_confirmation: dict[str, Any] | None,
+    node_states: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    children_specs = node_spec.get("children") if isinstance(node_spec.get("children"), list) else []
+    children: list[dict[str, Any]] = []
+    for index, child_spec in enumerate(children_specs):
+        if isinstance(child_spec, dict):
+            children.append(
+                _build_tree_state(
+                    child_spec,
+                    node_path=f"{node_path}.children[{index}]",
+                    completed_nodes=completed_nodes,
+                    active_node_path=active_node_path,
+                    active_node_message=active_node_message,
+                    pending_confirmation=pending_confirmation,
+                    node_states=node_states,
+                )
+            )
+    status = _build_node_status(node_path, completed_nodes, active_node_path, pending_confirmation)
+    completed = completed_nodes.get(node_path)
+    node_state = {
+        "node_path": node_path,
+        "name": str(node_spec.get("name") or node_spec.get("tool_name") or node_spec.get("playbook_id") or node_spec.get("target_playbook_id") or "").strip(),
+        "display_name": str(node_spec.get("display_name") or node_spec.get("message") or "").strip(),
+        "node_type": str(node_spec.get("type") or "").strip().lower(),
+        "status": status,
+        "passed": None if not isinstance(completed, dict) else bool(completed.get("passed")),
+        "message": "",
+        "children": children,
+    }
+    if status == "waiting_confirmation":
+        node_state["message"] = str((pending_confirmation or {}).get("message") or "").strip()
+    elif active_node_path == node_path:
+        node_state["message"] = str(active_node_message or (completed or {}).get("output") or "").strip()
+    elif isinstance(completed, dict):
+        node_state["message"] = str(completed.get("output") or "").strip()
+    node_states[node_path] = {
+        "status": node_state["status"],
+        "passed": node_state["passed"],
+        "message": node_state["message"],
+        "node_type": node_state["node_type"],
+        "name": node_state["name"],
+        "display_name": node_state["display_name"],
+    }
+    return node_state
+
+
 @dataclass
 class BehaviourTreeState:
     playbook: dict[str, Any]
@@ -42,27 +124,33 @@ class BehaviourTreeState:
     next_action: str = ""
     completed_nodes: dict[str, dict[str, Any]] = field(default_factory=dict)
     pending_child_resumes: dict[str, dict[str, Any]] = field(default_factory=dict)
+    interrupt_state: dict[str, Any] = field(default_factory=dict)
     active_node_path: str = ""
     active_node_message: str = ""
     status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None
+    tree_status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None
 
     def to_resume_state(self) -> dict[str, Any]:
         return {
-            "steps": list(self.steps),
-            "observations": dict(self.observations),
-            "recent_tasks": list(self.recent_tasks),
-            "sub_playbooks": list(self.sub_playbooks),
-            "conclusion": self.conclusion,
-            "next_action": self.next_action,
+            "playbook_context": dict(self.tool_context.get(PLAYBOOK_CONTEXT_KEY) or {}),
             "completed_nodes": dict(self.completed_nodes),
             "pending_child_resumes": dict(self.pending_child_resumes),
+            "interrupt_state": dict(self.interrupt_state),
         }
 
-    def to_execution_snapshot(self, *, executed: bool = False, passed: bool | None = None) -> dict[str, Any]:
+    def to_execution_snapshot(
+        self,
+        *,
+        include_tree_state: bool = False,
+        pending_confirmation: dict[str, Any] | None = None,
+        executed: bool = False,
+        passed: bool | None = None,
+    ) -> dict[str, Any]:
         payload = {
             "playbook_id": str(self.playbook.get("id") or "").strip(),
             "playbook_title": str(self.playbook.get("title") or "").strip(),
             "executed": executed,
+            "playbook_context": dict(self.tool_context.get(PLAYBOOK_CONTEXT_KEY) or {}),
             "steps": list(self.steps),
             "observations": dict(self.observations),
             "conclusion": self.conclusion,
@@ -71,21 +159,46 @@ class BehaviourTreeState:
             "sub_playbooks": list(self.sub_playbooks),
             "sub_playbook": self.sub_playbooks[-1] if self.sub_playbooks else None,
             "matched_context": self.playbook,
+            "active_node_path": self.active_node_path,
+            "active_node_message": self.active_node_message,
         }
+        if include_tree_state:
+            root_spec = self.playbook.get("root") if isinstance(self.playbook.get("root"), dict) else None
+            node_states: dict[str, dict[str, Any]] = {}
+            payload["tree_state"] = (
+                _build_tree_state(
+                    root_spec,
+                    node_path="root",
+                    completed_nodes=self.completed_nodes,
+                    active_node_path=self.active_node_path,
+                    active_node_message=self.active_node_message,
+                    pending_confirmation=pending_confirmation,
+                    node_states=node_states,
+                )
+                if isinstance(root_spec, dict)
+                else None
+            )
+            payload["node_states"] = node_states
         if passed is not None:
             payload["passed"] = passed
         return payload
 
     def emit_status_update(self, *, pending_confirmation: dict[str, Any] | None = None, executed: bool = False, passed: bool | None = None) -> None:
         """调用状态报告函数将当前的执行快照和节点状态更新到外部，支持 pending_confirmation 来指示当前是否在等待用户确认，以及 executed 和 passed 来指示当前节点的执行状态"""
-        if not callable(self.status_reporter):
-            return
-        self.status_reporter(
-            self.to_execution_snapshot(executed=executed, passed=passed),
-            pending_confirmation,
-            self.active_node_path,
-            self.active_node_message,
-        )
+        if callable(self.status_reporter):
+            self.status_reporter(
+                self.to_execution_snapshot(pending_confirmation=pending_confirmation, executed=executed, passed=passed),
+                pending_confirmation,
+                self.active_node_path,
+                self.active_node_message,
+            )
+        if callable(self.tree_status_reporter):
+            self.tree_status_reporter(
+                self.to_execution_snapshot(include_tree_state=True, pending_confirmation=pending_confirmation, executed=executed, passed=passed),
+                pending_confirmation,
+                self.active_node_path,
+                self.active_node_message,
+            )
 
 class ToolBehaviour(py_trees.behaviour.Behaviour):
     def __init__(self, node_spec: dict[str, Any], state: BehaviourTreeState, *, node_kind: str, node_path: str) -> None:
@@ -111,6 +224,12 @@ class ToolBehaviour(py_trees.behaviour.Behaviour):
                 node_path=self.node_path,
             )
         except PlaybookConfirmationRequired as interrupt:
+            self.state.interrupt_state = {
+                "type": "confirmation",
+                "node_path": self.node_path,
+                "node_name": str(self.node_spec.get("name") or self.node_spec.get("tool_name") or "").strip(),
+                "message": str(interrupt.request.get("message") or "").strip(),
+            }
             self.state.active_node_message = str(interrupt.request.get("message") or self.state.active_node_message).strip()
             self.state.emit_status_update(pending_confirmation=interrupt.request)
             raise
@@ -118,6 +237,7 @@ class ToolBehaviour(py_trees.behaviour.Behaviour):
         self.state.steps.append(result)
         update_observations(self.state.observations, result)
         self.state.completed_nodes[self.node_path] = dict(result)
+        self.state.interrupt_state = {}
         self.state.active_node_path = ""
         self.state.active_node_message = ""
         self.state.emit_status_update()
@@ -161,6 +281,7 @@ class ResultBehaviour(py_trees.behaviour.Behaviour):
         }
         self.state.steps.append(step)
         self.state.completed_nodes[self.node_path] = dict(step)
+        self.state.interrupt_state = {}
         self.state.active_node_path = ""
         self.state.active_node_message = ""
         self.state.emit_status_update()
@@ -199,8 +320,13 @@ class CallPlaybookBehaviour(py_trees.behaviour.Behaviour):
             "node_path": self.node_path,
         }
 
-    def _build_live_child_snapshot(self, playbook_id: str, child_result: dict[str, Any]) -> dict[str, Any]:
-        snapshot = self.state.to_execution_snapshot(executed=False, passed=None)
+    def _build_live_child_snapshot(
+        self,
+        playbook_id: str,
+        child_result: dict[str, Any],
+        pending_confirmation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        snapshot = self.state.to_execution_snapshot(pending_confirmation=pending_confirmation, executed=False, passed=None)
         snapshot["steps"] = [*self.state.steps, self._build_live_child_step(playbook_id, child_result)]
         snapshot["sub_playbooks"] = [*self.state.sub_playbooks, child_result]
         snapshot["sub_playbook"] = child_result
@@ -224,7 +350,7 @@ class CallPlaybookBehaviour(py_trees.behaviour.Behaviour):
                 rebased_pending = dict(pending_confirmation)
                 rebased_pending["node_path"] = self._rebase_child_node_path(rebased_pending.get("node_path", ""))
             self.state.status_reporter(
-                self._build_live_child_snapshot(playbook_id, child_payload),
+                self._build_live_child_snapshot(playbook_id, child_payload, rebased_pending),
                 rebased_pending,
                 self._rebase_child_node_path(active_node_path),
                 active_node_message,
@@ -259,6 +385,12 @@ class CallPlaybookBehaviour(py_trees.behaviour.Behaviour):
             resume_state = child_result.get("resume_state")
             if isinstance(resume_state, dict):
                 self.state.pending_child_resumes[self.node_path] = resume_state
+            self.state.interrupt_state = {
+                "type": "child_confirmation",
+                "node_path": self.node_path,
+                "node_name": str(self.node_spec.get("name") or self.node_spec.get("playbook_id") or "").strip(),
+                "message": str((child_result.get("pending_confirmation") or {}).get("message") or "").strip(),
+            }
             pending_confirmation = dict(child_result.get("pending_confirmation") or {})
             pending_confirmation["node_path"] = self._rebase_child_node_path(pending_confirmation.get("node_path", ""))
             self.state.active_node_message = str(pending_confirmation.get("message") or self.state.active_node_message).strip()
@@ -269,6 +401,7 @@ class CallPlaybookBehaviour(py_trees.behaviour.Behaviour):
         step = self._build_live_child_step(playbook_id, child_result)
         self.state.steps.append(step)
         self.state.completed_nodes[self.node_path] = dict(step)
+        self.state.interrupt_state = {}
         self.state.active_node_path = ""
         self.state.active_node_message = ""
         self.state.emit_status_update()
@@ -334,6 +467,8 @@ def execute_tree_playbook(
     max_depth: int = 4,
     resume_state: dict[str, Any] | None = None,
     status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
+    tree_status_reporter: Callable[[dict[str, Any], dict[str, Any] | None, str, str], None] | None = None,
+    include_tree_state: bool = False,
 ) -> dict[str, Any]:
     playbook_id = str(playbook.get("id") or "").strip()
     playbook_title = str(playbook.get("title") or "").strip()
@@ -347,30 +482,47 @@ def execute_tree_playbook(
     if playbook_id in normalized_visited_ids:
         return {"playbook_id": playbook_id, "playbook_title": playbook_title, "executed": False, "reason": "检测到 playbook 循环引用", "matched_context": playbook}
     normalized_visited_ids.add(playbook_id)
-    playbook_context = build_playbook_rule_context(
-        {
-            **dict(tool_context or {}),
-            "playbook_id": playbook_id,
-            "playbook_title": playbook_title,
-            "playbook_source_path": playbook_source_path,
-            "playbook_rules_source_path": playbook_rules_source_path,
-        }
-    )
+    raw_context_schema = playbook.get("context_schema")
+    declared_context_keys = [
+        str(key or "").strip()
+        for key in (raw_context_schema or {}).keys()
+        if str(key or "").strip()
+    ] if isinstance(raw_context_schema, dict) else []
+    base_tool_context = {
+        **dict(tool_context or {}),
+        "playbook_id": playbook_id,
+        "playbook_title": playbook_title,
+        "playbook_source_path": playbook_source_path,
+        "playbook_rules_source_path": playbook_rules_source_path,
+    }
+    base_tool_context[RUNTIME_CONTEXT_KEY] = {
+        **(dict(base_tool_context.get(RUNTIME_CONTEXT_KEY) or {}) if isinstance(base_tool_context.get(RUNTIME_CONTEXT_KEY), dict) else {}),
+        "session": base_tool_context.get("session"),
+        "session_id": base_tool_context.get("session_id"),
+        "playbook_id": playbook_id,
+        "playbook_title": playbook_title,
+    }
+    resumed_playbook_context = dict(resume_state.get("playbook_context") or {}) if isinstance(resume_state, dict) else {}
+    initial_playbook_context = dict(resumed_playbook_context)
+    for key in declared_context_keys:
+        if key not in initial_playbook_context and key in base_tool_context:
+            initial_playbook_context[key] = base_tool_context.get(key)
+    base_tool_context[PLAYBOOK_CONTEXT_KEY] = initial_playbook_context
+    base_tool_context[PLAYBOOK_CONTEXT_KEYS_KEY] = declared_context_keys
+    sync_playbook_context_view(base_tool_context)
+    playbook_context = build_playbook_rule_context(base_tool_context)
+    sync_playbook_context_view(playbook_context)
     state = BehaviourTreeState(
         playbook=playbook,
         tool_context=playbook_context,
         visited_ids=normalized_visited_ids,
         depth=depth,
         max_depth=max_depth,
-        steps=list(resume_state.get("steps") or []) if isinstance(resume_state, dict) else [],
-        observations=dict(resume_state.get("observations") or {}) if isinstance(resume_state, dict) else {},
-        recent_tasks=list(resume_state.get("recent_tasks") or []) if isinstance(resume_state, dict) else [],
-        sub_playbooks=list(resume_state.get("sub_playbooks") or []) if isinstance(resume_state, dict) else [],
-        conclusion=str(resume_state.get("conclusion") or "") if isinstance(resume_state, dict) else "",
-        next_action=str(resume_state.get("next_action") or "") if isinstance(resume_state, dict) else "",
         completed_nodes=dict(resume_state.get("completed_nodes") or {}) if isinstance(resume_state, dict) else {},
         pending_child_resumes=dict(resume_state.get("pending_child_resumes") or {}) if isinstance(resume_state, dict) else {},
+        interrupt_state=dict(resume_state.get("interrupt_state") or {}) if isinstance(resume_state, dict) else {},
         status_reporter=status_reporter,
+        tree_status_reporter=tree_status_reporter,
     )
     root_spec = playbook.get("root")
     if not isinstance(root_spec, dict):
@@ -382,21 +534,18 @@ def execute_tree_playbook(
         tree.tick()
     except PlaybookConfirmationRequired as interrupt:
         state.emit_status_update(pending_confirmation=interrupt.request)
+        interrupted_snapshot = state.to_execution_snapshot(
+            include_tree_state=include_tree_state,
+            pending_confirmation=interrupt.request,
+            executed=False,
+            passed=None,
+        )
         return {
-            "playbook_id": playbook_id,
-            "playbook_title": playbook_title,
-            "executed": False,
+            **interrupted_snapshot,
             "interrupted": True,
+            "interrupt_state": dict(state.interrupt_state),
             "pending_confirmation": interrupt.request,
             "resume_state": state.to_resume_state(),
-            "steps": state.steps,
-            "observations": state.observations,
-            "conclusion": state.conclusion,
-            "next_action": state.next_action,
-            "recent_tasks": state.recent_tasks,
-            "sub_playbooks": state.sub_playbooks,
-            "sub_playbook": state.sub_playbooks[-1] if state.sub_playbooks else None,
-            "matched_context": playbook,
         }
     passed = root.status == py_trees.common.Status.SUCCESS
     if not state.conclusion:
@@ -404,17 +553,4 @@ def execute_tree_playbook(
     if not state.next_action:
         state.next_action = "继续观察当前状态" if passed else "查看未通过的节点并继续处理"
     state.emit_status_update(executed=True, passed=passed)
-    return {
-        "playbook_id": playbook_id,
-        "playbook_title": playbook_title,
-        "executed": True,
-        "steps": state.steps,
-        "observations": state.observations,
-        "passed": passed,
-        "conclusion": state.conclusion,
-        "next_action": state.next_action,
-        "recent_tasks": state.recent_tasks,
-        "sub_playbooks": state.sub_playbooks,
-        "sub_playbook": state.sub_playbooks[-1] if state.sub_playbooks else None,
-        "matched_context": playbook,
-    }
+    return state.to_execution_snapshot(include_tree_state=include_tree_state, executed=True, passed=passed)

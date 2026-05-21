@@ -4,7 +4,7 @@ from typing import Any
 from ....core.models import TaskFailure
 from ....infra.stores import TaskContext
 from ....shared.runtime import upload_progress_manager
-from ....shared.confirmation import apply_confirmation_response
+from ....shared.confirmation import apply_confirmation_response, set_runtime_value
 from ....common import (
     detect_ignored_package_install_error,
     extract_critical_command_warnings,
@@ -97,6 +97,7 @@ def create_package_workflow_task_runner(
     cleanup_existing_remote_files: bool = True,
     upload_token: str = "",
     owner_id: str = "",
+    include_tree_state: bool = False,
 ):
     identity = robot_identity(session)
     preview_remote_path = posixpath.join(remote_dir, file_name)
@@ -158,10 +159,14 @@ def create_package_workflow_task_runner(
                 "upload_token": upload_token,
                 "source_metadata": resolved_source_metadata,
             }
-            workflow_context["install_output_callback"] = _build_install_output_callback(
-                ctx,
-                upload_token=upload_token,
-                tool_context=workflow_context,
+            set_runtime_value(
+                workflow_context,
+                "install_output_callback",
+                _build_install_output_callback(
+                    ctx,
+                    upload_token=upload_token,
+                    tool_context=workflow_context,
+                ),
             )
             resume_state = None
             if isinstance(continuation, dict):
@@ -178,6 +183,7 @@ def create_package_workflow_task_runner(
                 workflow_context,
                 workflow_type="normal",
                 resume_state=resume_state,
+                include_tree_state=include_tree_state,
                 status_reporter=_build_playbook_status_reporter(
                     ctx,
                     upload_token=upload_token,
@@ -187,6 +193,9 @@ def create_package_workflow_task_runner(
             summary["workflow_id"] = "package-deploy"
             summary["workflow_type"] = "normal"
             summary["workflow_result"] = playbook_result or {}
+            if include_tree_state and isinstance(playbook_result, dict):
+                summary["workflow_tree_state"] = playbook_result.get("tree_state")
+                summary["workflow_node_states"] = playbook_result.get("node_states") or {}
             history["workflow_id"] = "package-deploy"
             history["workflow_type"] = "normal"
             ctx.log(
@@ -199,12 +208,16 @@ def create_package_workflow_task_runner(
             if not isinstance(playbook_result, dict):
                 raise TaskFailure("未找到 normal workflow: package-deploy", {"summary": summary, "history": history})
             if isinstance(playbook_result.get("pending_confirmation"), dict):
-                probe_step = find_playbook_step(playbook_result, "probe_package_machine_types") or {}
+                probe_step = (
+                    find_playbook_step(playbook_result, "probe_package_options")
+                    or find_playbook_step(playbook_result, "probe_package_machine_types")
+                    or {}
+                )
                 probe_payload = probe_step.get("raw_result") if isinstance(probe_step.get("raw_result"), dict) else {}
                 if probe_payload:
                     summary["probe_command"] = str(probe_payload.get("command") or "").strip()
-                    summary["machine_options"] = probe_payload.get("machine_options") or []
-                    inferred_machine_type = str(probe_payload.get("inferred_machine_type") or "").strip()
+                    summary["machine_options"] = probe_payload.get("options") or probe_payload.get("machine_options") or []
+                    inferred_machine_type = str(probe_payload.get("inferred_value") or probe_payload.get("inferred_machine_type") or "").strip()
                     if inferred_machine_type:
                         summary["inferred_machine_type"] = inferred_machine_type
                         summary["machine_type"] = inferred_machine_type
@@ -271,11 +284,15 @@ def create_package_workflow_task_runner(
                 summary["supports_target_credentials"] = bool(install_payload.get("supports_target_credentials"))
                 history["supports_target_credentials"] = bool(install_payload.get("supports_target_credentials"))
 
-            probe_step = find_playbook_step(playbook_result, "probe_package_machine_types") or {}
+            probe_step = (
+                find_playbook_step(playbook_result, "probe_package_options")
+                or find_playbook_step(playbook_result, "probe_package_machine_types")
+                or {}
+            )
             probe_payload = probe_step.get("raw_result") if isinstance(probe_step.get("raw_result"), dict) else {}
             if probe_payload:
                 summary["probe_command"] = str(probe_payload.get("command") or "").strip()
-                summary["machine_options"] = probe_payload.get("machine_options") or []
+                summary["machine_options"] = probe_payload.get("options") or probe_payload.get("machine_options") or []
                 if str(probe_payload.get("warning") or "").strip():
                     warnings.append(str(probe_payload.get("warning") or "").strip())
                     ctx.log(f"告警: {str(probe_payload.get('warning') or '').strip()}")

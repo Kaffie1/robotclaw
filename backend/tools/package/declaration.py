@@ -5,10 +5,10 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ...operations.services import current_robot_password
+from ...shared.confirmation import get_runtime_value, set_context_value
 from ..base import ToolRuntime, with_target_tool_runtime
-from ..remote import DeviceTypeArgs, RemotePathArgs
+from ..remote import DeviceTypeArgs
 from .impl import (
-    package_probe_credentials,
     prepare_artifact_sources,
     remote_execute_with_fallback,
     remote_stage_artifacts,
@@ -35,29 +35,20 @@ class RemoteExecuteWithFallbackArgs(DeviceTypeArgs):
     on_failure: str = "raise"
     fallback_value: Any = None
     timeout_seconds: int = 30
-
-
-def handle_package_probe_credentials(args: RemotePathArgs, tool_context: dict[str, Any] | None) -> dict[str, str | bool]:
-    def _handler(runtime: ToolRuntime, target: dict[str, str], _: bool) -> dict[str, str | bool]:
-        result = package_probe_credentials(runtime.client, args.path)
-        return {**result, "device_type": str(target.get("device_type") or args.device_type).upper()}
-
-    return with_target_tool_runtime(tool_context, device_type=args.device_type, handler=_handler)
-
-
+    target_credentials_probe: dict[str, Any] | None = None
 def handle_prepare_artifact_sources(args: PrepareArtifactSourcesArgs, tool_context: dict[str, Any] | None) -> dict[str, object]:
-    normalized_upload_token = str(args.upload_token or (tool_context or {}).get("upload_token") or "").strip()
+    normalized_upload_token = str(args.upload_token or get_runtime_value(tool_context, "upload_token") or "").strip()
     result = prepare_artifact_sources(list(args.source_items or []), upload_token=normalized_upload_token)
     if isinstance(tool_context, dict):
         artifact_items = list(result.get("artifact_items") or [])
-        tool_context["artifact_items"] = artifact_items
-        tool_context["package_files"] = list(result.get("package_files") or [])
+        set_context_value(tool_context, "artifact_items", artifact_items)
+        set_context_value(tool_context, "package_files", list(result.get("package_files") or []))
         if artifact_items:
             first_item = artifact_items[0] if isinstance(artifact_items[0], dict) else {}
-            tool_context["file_name"] = str(first_item.get("file_name") or "").strip()
-            tool_context["file_bytes"] = bytes(first_item.get("file_bytes") or b"")
+            set_context_value(tool_context, "file_name", str(first_item.get("file_name") or "").strip())
+            set_context_value(tool_context, "file_bytes", bytes(first_item.get("file_bytes") or b""))
             if isinstance(first_item.get("source_metadata"), dict):
-                tool_context["source_metadata"] = first_item.get("source_metadata")
+                set_context_value(tool_context, "source_metadata", first_item.get("source_metadata"))
     return {
         "artifact_count": int(result.get("artifact_count") or 0),
         "total_bytes": int(result.get("total_bytes") or 0),
@@ -73,7 +64,7 @@ def handle_prepare_artifact_sources(args: PrepareArtifactSourcesArgs, tool_conte
 
 def handle_remote_stage_artifacts(args: RemoteStageArtifactsArgs, tool_context: dict[str, Any] | None) -> dict[str, object]:
     artifact_items = list(args.artifact_items or [])
-    upload_token = str(args.upload_token or (tool_context or {}).get("upload_token") or "").strip()
+    upload_token = str(args.upload_token or get_runtime_value(tool_context, "upload_token") or "").strip()
 
     def _handler(runtime: ToolRuntime, target: dict[str, str], _: bool) -> dict[str, object]:
         try:
@@ -94,7 +85,7 @@ def handle_remote_stage_artifacts(args: RemoteStageArtifactsArgs, tool_context: 
                 upload_progress_manager.fail(upload_token, f"上传失败: {exc}")
             raise
         if isinstance(tool_context, dict):
-            tool_context["uploaded_file_paths"] = result.get("uploaded_file_paths") or []
+            set_context_value(tool_context, "uploaded_file_paths", result.get("uploaded_file_paths") or [])
         return {**result, "device_type": str(target.get("device_type") or args.device_type).upper()}
 
     return with_target_tool_runtime(tool_context, device_type=args.device_type, handler=_handler)
@@ -113,7 +104,8 @@ def handle_remote_execute_with_fallback(args: RemoteExecuteWithFallbackArgs, too
             device_type=str(target.get("device_type") or args.device_type).upper(),
             target_username=str(target.get("username") or ""),
             target_password=str(target.get("password") or ""),
-            output_callback=(tool_context or {}).get("install_output_callback"),
+            target_credentials_probe=dict(args.target_credentials_probe or {}),
+            output_callback=get_runtime_value(tool_context, "install_output_callback"),
         )
         return {**result, "device_type": str(target.get("device_type") or args.device_type).upper()}
 

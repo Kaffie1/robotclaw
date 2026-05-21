@@ -7,6 +7,7 @@ from typing import Any, Callable
 from pydantic import BaseModel
 
 from ..core.models import ApiError
+from ..shared.confirmation import get_runtime_value
 from ..shared.runtime import session_store
 from ..operations.workflow import create_package_target_client
 from ..operations.services import ensure_client_connected
@@ -30,10 +31,10 @@ class ToolDefinition:
 
 
 def ensure_tool_session(tool_context: dict[str, Any] | None) -> dict[str, Any]:
-    session = (tool_context or {}).get("session")
+    session = get_runtime_value(tool_context, "session")
     if isinstance(session, dict):
         return session
-    session_id = str((tool_context or {}).get("session_id") or "").strip()
+    session_id = str(get_runtime_value(tool_context, "session_id") or "").strip()
     resolved_session = session_store.get(session_id)
     if not isinstance(resolved_session, dict):
         raise ApiError("当前工具调用缺少会话上下文")

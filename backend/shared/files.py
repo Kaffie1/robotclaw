@@ -218,4 +218,5 @@ def materialize_package_bytes_from_source(source_metadata: dict[str, Any], *, lo
         "local_tmp_path": local_tmp_path,
         "source_file_name": file_name,
     }
+    # todo: 不要把大文件直接读到内存里，应该在后续处理流程中直接使用文件路径进行安装部署等操作
     return file_name, local_file.read_bytes(), normalized_metadata
