@@ -8,7 +8,7 @@ from collections import deque
 from collections.abc import Iterator
 from typing import Any
 
-from ..common import logger, normalize_message_content
+from ..shared import logger, normalize_message_content
 from ..playbooks.loader import find_playbook_by_id
 
 _state_lock = threading.RLock()

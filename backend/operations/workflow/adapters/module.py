@@ -1,7 +1,7 @@
 import posixpath
 from typing import Any
 
-from ....common import log_command_result
+from ....shared import log_command_result
 from ....core.models import TaskFailure
 from ...services import ensure_client_connected, robot_identity
 from ....infra.stores import TaskContext

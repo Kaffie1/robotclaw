@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..common import (
+from ..shared import (
     append_fault_trace,
     expand_context_references,
     get_confirmation_request,

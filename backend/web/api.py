@@ -28,6 +28,7 @@ from ..agent.playbook_state import (
 )
 from ..agent.graph_nodes import load_catalog_node, resolve_playbook_route
 from ..core.config import (
+    APP_EDITION,
     DEPLOY_CONFIG_PATH,
     MAX_TASK_ITEMS,
     MODULE_DEPLOY_ROOT,
@@ -36,7 +37,7 @@ from ..core.config import (
     SESSION_IDLE_TIMEOUT_SECONDS,
     STATIC_DIR,
 )
-from ..common import (
+from ..shared import (
     append_chat_history_turn,
     delete_chat_history_file,
     get_asset_version,
@@ -343,6 +344,7 @@ def create_app() -> FastAPI:
                 "package_machine_options": deploy_config_store.get_machine_options("package"),
                 "module_machine_options": deploy_config_store.get_machine_options("module"),
                 "asset_version": get_asset_version(),
+                "app_edition": APP_EDITION,
             },
         )
 
@@ -355,6 +357,7 @@ def create_app() -> FastAPI:
         return {
             "ok": True,
             "session_id": get_session_id(request),
+            "app_edition": APP_EDITION,
             "connected": session["client"].connected,
             "last_config": session["last_config"],
             "last_remote_deb_path": session["last_remote_deb_path"],
@@ -368,16 +371,21 @@ def create_app() -> FastAPI:
     @app.post("/api/connect")
     def api_connect(payload: ConnectPayload, request: Request):
         session = get_session(request)
-        host = require_text(payload.host, "主机不能为空")
-        username = require_text(payload.username, "用户名不能为空")
+        if APP_EDITION == "robot":
+            host = str(payload.host or "").strip() or "local"
+            username = str(payload.username or "").strip() or os.getenv("USER") or "robot"
+        else:
+            host = require_text(payload.host, "主机不能为空")
+            username = require_text(payload.username, "用户名不能为空")
         password = str(payload.password or "")
         pico_host = str(payload.pico_host or "").strip()
         pico_username = str(payload.pico_username or "").strip()
         pico_password = str(payload.pico_password or "")
-        if not password:
+        if APP_EDITION != "robot" and not password:
             raise ApiError("请填写密码")
         config = ConnectionConfig(host=host, port=int(payload.port), username=username, password=password)
-        session["client"].connect(config)
+        if APP_EDITION != "robot":
+            session["client"].connect(config)
         session["last_config"] = {
             "host": host,
             "port": int(payload.port),
@@ -404,7 +412,8 @@ def create_app() -> FastAPI:
             }
         )
         shortcut_payload = refresh_remote_shortcuts(session)
-        return {"ok": True, "message": "连接成功", "remote_shortcuts": shortcut_payload["shortcuts"], "preferred_root": shortcut_payload["preferred_root"], "saved_connections": saved_connections}
+        message = "连接成功" if APP_EDITION != "robot" else "本机模式配置已保存"
+        return {"ok": True, "message": message, "remote_shortcuts": shortcut_payload["shortcuts"], "preferred_root": shortcut_payload["preferred_root"], "saved_connections": saved_connections}
 
     @app.post("/api/disconnect")
     def api_disconnect(request: Request):

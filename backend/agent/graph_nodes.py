@@ -6,14 +6,14 @@ import time
 
 from ..core.config import OPENAI_CHAT_MODEL
 from ..core.models import ApiError
-from ..common import (
+from ..shared import (
     append_fault_trace,
     apply_confirmation_response,
     extract_json_payload,
     logger,
     normalize_message_content,
 )
-from ..common import strip_think_blocks
+from ..shared import strip_think_blocks
 from ..playbooks import build_fault_doc_context_from_playbook, list_playbooks, run_scripted_playbook_by_id
 from ..playbooks.loader import find_playbook_by_id
 from ..tools import tool_registry

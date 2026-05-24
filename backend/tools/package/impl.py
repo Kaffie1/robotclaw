@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from ...common import extract_package_prefix, get_runtime_logger, render_remote_command
+from ...shared import extract_package_prefix, get_runtime_logger, render_remote_command
 from ...core.config import PACKAGE_DEPLOY_DIR
 from ...operations.workflow import probe_remote_package_supports_credentials
 from ...shared.files import materialize_package_bytes_from_source

@@ -4,10 +4,10 @@ import re
 import shlex
 from typing import Any
 
-from ...core.config import PACKAGE_DEPLOY_DIR
+from ...core.config import IS_ROBOT_EDITION, PACKAGE_DEPLOY_DIR
 from ...core.models import ApiError, ConnectionConfig
-from ...common import render_remote_command, require_text
-from ...infra import RobotClient
+from ...shared import render_remote_command, require_text
+from ...infra import create_ssh_client
 from ..services import ensure_client_connected, robot_identity
 
 
@@ -69,7 +69,19 @@ def create_package_target_client(
     if not target["requires_jump"]:
         return base_client, False, target
 
-    jump_client = RobotClient()
+    if IS_ROBOT_EDITION:
+        direct_client = create_ssh_client()
+        direct_client.connect(
+            ConnectionConfig(
+                host=str(target["host"]),
+                port=int(target["port"]),
+                username=str(target["username"]),
+                password=str(target["password"]),
+            ),
+        )
+        return direct_client, True, target
+
+    jump_client = create_ssh_client()
     jump_client.connect_via_jump(
         base_client,
         ConnectionConfig(

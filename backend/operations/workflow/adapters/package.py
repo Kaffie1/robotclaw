@@ -5,7 +5,7 @@ from ....core.models import TaskFailure
 from ....infra.stores import TaskContext
 from ....shared.runtime import upload_progress_manager
 from ....shared.confirmation import apply_confirmation_response, set_runtime_value
-from ....common import (
+from ....shared import (
     extract_critical_command_warnings,
     log_command_result,
     render_remote_command,

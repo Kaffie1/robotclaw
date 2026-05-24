@@ -8,7 +8,7 @@ from typing import Any, Callable
 from pydantic import BaseModel
 
 from ..core.models import ApiError
-from ..common import get_runtime_logger, get_runtime_trace_logger
+from ..shared import get_runtime_logger, get_runtime_trace_logger
 from .base import ToolDefinition
 from .docker import (
     DockerComposeExecArgs,

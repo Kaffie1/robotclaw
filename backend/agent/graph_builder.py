@@ -6,7 +6,7 @@ from typing import Any
 
 from ..core.config import OPENAI_CHAT_MODEL
 from ..core.models import ApiError
-from ..common import append_fault_trace, logger, normalize_message_content, strip_think_blocks
+from ..shared import append_fault_trace, logger, normalize_message_content, strip_think_blocks
 from .graph_state import FaultChatState
 try:
     from langgraph.checkpoint.memory import InMemorySaver

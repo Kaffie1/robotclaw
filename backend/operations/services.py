@@ -4,7 +4,7 @@ from typing import Any
 from ..core.models import ApiError, TaskFailure
 from ..infra.stores import TaskContext
 from ..shared.runtime import history_store
-from ..common import log_command_result, now_text, require_text
+from ..shared import log_command_result, now_text, require_text
 
 
 def ensure_client_connected(session: dict[str, Any]):

@@ -27,8 +27,17 @@ def load_env_file(env_path: str | Path) -> None:
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_env_file(BASE_DIR / ".env")
 
+
+def normalize_app_edition(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"robot", "robotics", "local"}:
+        return "robot"
+    return "server"
+
 APP_HOST = str(os.getenv("APP_HOST") or "0.0.0.0").strip() or "127.0.0.1"
 APP_PORT = int(str(os.getenv("APP_PORT") or "8000").strip() or "8000")
+APP_EDITION = normalize_app_edition(os.getenv("APP_EDITION") or "server")
+IS_ROBOT_EDITION = APP_EDITION == "robot"
 OPENAI_API_KEY = str(os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = str(os.getenv("OPENAI_BASE_URL") or "").strip()
 OPENAI_CHAT_MODEL = str(os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini").strip() or "gpt-4.1-mini"

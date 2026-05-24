@@ -14,7 +14,7 @@ import yaml
 
 from ..core.config import FAULT_PLAYBOOK_RULES_FILENAME
 from ..core.models import ApiError
-from ..common import expand_context_references
+from ..shared import expand_context_references
 from .schema import validate_rule_catalog, validate_rule_spec
 
 

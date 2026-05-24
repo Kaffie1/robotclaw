@@ -5,7 +5,7 @@ from typing import Any
 
 from ...core.config import MODULE_DEPLOY_NAMES, MODULE_DEPLOY_PROJECT_ROOT
 from ...core.models import ApiError
-from ...common import get_runtime_logger, short_error
+from ...shared import get_runtime_logger, short_error
 from ..common import build_command_output_text
 
 logger = get_runtime_logger()
