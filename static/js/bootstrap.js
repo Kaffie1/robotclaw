@@ -5,13 +5,8 @@ window.addEventListener("load", async () => {
     renderChatMessages();
     switchPage(initialPage);
     switchGuidePage("flow");
-    switchRosSection("topic");
-    switchRosTab("publish");
-    updateRosTopicSummary();
-    updateRosPublishHistory();
     await loadFeishuDocs();
     await loadAutoDeployConfigs();
-    await loadRosFilterConfig();
     initializeTimeSelectors();
     initializeModuleFilters();
     const data = await request("/api/status");

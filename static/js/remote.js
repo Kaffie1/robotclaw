@@ -298,9 +298,6 @@ connectForm.addEventListener("submit", async (event) => {
       { forceApplyMostRecent: Boolean(selectedConnection) },
     );
     updateConnectionStatus(true);
-    rosState.hasLoadedTopics = false;
-    rosState.hasLoadedServices = false;
-    setRosPageHint("提示：点击右上角按钮可刷新列表");
     appendLog(
       "SSH 连接成功",
       `ORIN ${payload.username}@${payload.host}:${payload.port}${payload.pico_host ? `\nPICO ${payload.pico_username || "-"}@${payload.pico_host}:${payload.pico_port || DEFAULT_CONNECTION_FORM.pico_port}` : ""}`,
@@ -386,26 +383,6 @@ document.getElementById("disconnectBtn").addEventListener("click", async () => {
   try {
     await request("/api/disconnect", { method: "POST" });
     clearChatClientState();
-    rosState.topics = [];
-    rosState.services = [];
-    rosState.selectedTopic = "";
-    rosState.selectedService = "";
-    rosState.selectedTopicType = "";
-    rosState.selectedTopicDirection = "";
-    rosState.topicAvailable = false;
-    rosState.lastPublishRecord = null;
-    rosState.hasLoadedTopics = false;
-    rosState.hasLoadedServices = false;
-    renderRosNameList("topic");
-    renderRosNameList("service");
-    updateRosTopicSummary();
-    updateRosPublishHistory();
-    if (rosSelectedServiceName) {
-      rosSelectedServiceName.textContent = "未选择 Service";
-    }
-    setRosPageHint("提示：请先连接机器人或确保 rosbridge 容器已启动");
-    setRosOutput(rosTopicDetailOutput, "连接已断开，请重新连接机器人后再加载 Topic 列表。");
-    setRosOutput(rosServiceDetailOutput, "连接已断开，请重新连接机器人后再加载 Service 列表。");
     await syncRemoteDirectories({ connected: false });
     appendLog("连接已断开");
   } catch (error) {

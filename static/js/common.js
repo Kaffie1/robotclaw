@@ -32,8 +32,6 @@ const pageNavButtons = Array.from(document.querySelectorAll("[data-page-target]"
 const pagePanels = Array.from(document.querySelectorAll("[data-page-panel]"));
 const guideNavButtons = Array.from(document.querySelectorAll("[data-guide-target]"));
 const guidePanels = Array.from(document.querySelectorAll("[data-guide-panel]"));
-const rosNavButtons = Array.from(document.querySelectorAll("[data-ros-target]"));
-const rosPanels = Array.from(document.querySelectorAll("[data-ros-panel]"));
 const feishuDocsList = document.getElementById("feishuDocsList");
 const orinLogModuleSelect = document.getElementById("orinLogModuleSelect");
 const orinLogStatus = document.getElementById("orinLogStatus");
@@ -41,47 +39,6 @@ const downloadOrinLogBtn = document.getElementById("downloadOrinLogBtn");
 const picoLogModuleSelect = document.getElementById("picoLogModuleSelect");
 const picoLogStatus = document.getElementById("picoLogStatus");
 const downloadPicoLogBtn = document.getElementById("downloadPicoLogBtn");
-const refreshRosTopicsBtn = document.getElementById("refreshRosTopicsBtn");
-const refreshRosServicesBtn = document.getElementById("refreshRosServicesBtn");
-const rosPageHint = document.getElementById("rosPageHint");
-const rosTopicSearchInput = document.getElementById("rosTopicSearchInput");
-const rosServiceSearchInput = document.getElementById("rosServiceSearchInput");
-const rosTopicList = document.getElementById("rosTopicList");
-const rosServiceList = document.getElementById("rosServiceList");
-const rosTopicListCount = document.getElementById("rosTopicListCount");
-const rosServiceListCount = document.getElementById("rosServiceListCount");
-const rosSelectedTopicName = document.getElementById("rosSelectedTopicName");
-const rosSelectedTopicType = document.getElementById("rosSelectedTopicType");
-const rosSelectedTopicDirection = document.getElementById("rosSelectedTopicDirection");
-const rosTopicAvailabilityBadge = document.getElementById("rosTopicAvailabilityBadge");
-const rosSelectedServiceName = document.getElementById("rosSelectedServiceName");
-const rosSelectedServiceType = document.getElementById("rosSelectedServiceType");
-const rosPublishTabBtn = document.getElementById("rosPublishTabBtn");
-const rosSubscribeTabBtn = document.getElementById("rosSubscribeTabBtn");
-const rosPublishPanel = document.getElementById("rosPublishPanel");
-const rosSubscribePanel = document.getElementById("rosSubscribePanel");
-const rosTopicInfoBtn = document.getElementById("rosTopicInfoBtn");
-const rosTopicTypeBtn = document.getElementById("rosTopicTypeBtn");
-const rosTopicEchoBtn = document.getElementById("rosTopicEchoBtn");
-const rosTopicPubBtn = document.getElementById("rosTopicPubBtn");
-const rosTopicPubPythonBtn = document.getElementById("rosTopicPubPythonBtn");
-const rosTopicPubPythonCopyBtn = document.getElementById("rosTopicPubPythonCopyBtn");
-const rosTopicSubPythonBtn = document.getElementById("rosTopicSubPythonBtn");
-const rosTopicSubPythonCopyBtn = document.getElementById("rosTopicSubPythonCopyBtn");
-const rosTopicPubTypeInput = document.getElementById("rosTopicPubTypeInput");
-const rosTopicPubMessageInput = document.getElementById("rosTopicPubMessageInput");
-const rosTopicPublishHistory = document.getElementById("rosTopicPublishHistory");
-const rosTopicPublishOutput = document.getElementById("rosTopicPublishOutput");
-const rosTopicDefinitionOutput = document.getElementById("rosTopicDefinitionOutput");
-const rosTopicDetailOutput = document.getElementById("rosTopicDetailOutput");
-const rosServiceInfoBtn = document.getElementById("rosServiceInfoBtn");
-const rosServiceTypeBtn = document.getElementById("rosServiceTypeBtn");
-const rosServicePythonBtn = document.getElementById("rosServicePythonBtn");
-const rosServicePythonCopyBtn = document.getElementById("rosServicePythonCopyBtn");
-const rosServiceCallBtn = document.getElementById("rosServiceCallBtn");
-const rosServiceCallRequestInput = document.getElementById("rosServiceCallRequestInput");
-const rosServiceDefinitionOutput = document.getElementById("rosServiceDefinitionOutput");
-const rosServiceDetailOutput = document.getElementById("rosServiceDetailOutput");
 const timeSelectContainers = Array.from(document.querySelectorAll(".log-time-selects"));
 const moduleFilterRoots = Array.from(document.querySelectorAll("[data-module-filter]"));
 const remoteDirSelects = Array.from(document.querySelectorAll("[data-remote-dir-select]"));
@@ -150,29 +107,6 @@ let manualPackageServerFilePath = "";
 let manualModuleServerFilePath = "";
 let pendingPackageAutoDeployUrls = [];
 const DEFAULT_SERVER_FILE_PLACEHOLDER = "填写服务器包路径；留空时使用本地上传";
-const rosState = {
-  topics: [],
-  services: [],
-  selectedTopic: "",
-  selectedService: "",
-  selectedTopicType: "",
-  selectedTopicDefinition: "",
-  selectedTopicDirection: "",
-  topicAvailable: false,
-  selectedServiceType: "",
-  selectedServiceDefinition: "",
-  activeTab: "publish",
-  activeSection: "topic",
-  lastPublishRecord: null,
-  hasLoadedTopics: false,
-  hasLoadedServices: false,
-};
-const rosFilterConfig = {
-  topicPrefixes: [],
-  servicePrefixes: [],
-  topicNames: [],
-  serviceNames: [],
-};
 const chatState = {
   messages: [],
   pending: false,

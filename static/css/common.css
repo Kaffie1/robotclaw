@@ -1777,15 +1777,6 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .ros-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .ros-topic-list-card,
-  .ros-topic-detail-card {
-    min-height: 0;
-  }
-
   .log-card-grid {
     grid-template-columns: 1fr;
   }
@@ -1821,23 +1812,6 @@ code {
   .page-shell {
     width: calc(100% - 20px);
     padding-top: 16px;
-  }
-
-  .ros-page-head {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .ros-page-banner-copy {
-    margin-left: 0;
-  }
-
-  .ros-card {
-    padding: 18px;
-  }
-
-  .ros-topic-summary-card {
-    grid-template-columns: 1fr;
   }
 
   .deploy-card,
@@ -1980,17 +1954,5 @@ code {
   .record-actions {
     grid-template-columns: 1fr;
     justify-content: stretch;
-  }
-
-  .ros-page-panel .button-row.ros-subscribe-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    justify-content: start;
-  }
-
-  .ros-page-panel .button-row.ros-subscribe-actions .ghost {
-    width: 100%;
-    min-width: 0;
-    padding-inline: 12px;
-    font-size: 14px;
   }
 }

@@ -44,17 +44,6 @@ class ExecutePayload(BaseModel):
     device_type: str = "ORIN"
 
 
-class RosTopicPublishPayload(BaseModel):
-    name: str
-    message_type: str
-    message: str = ""
-
-
-class RosServiceCallPayload(BaseModel):
-    name: str
-    request: str = ""
-
-
 class ToolCallPayload(BaseModel):
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)

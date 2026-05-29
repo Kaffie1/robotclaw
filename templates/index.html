@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="/static/css/remote.css?v={{ asset_version }}" />
     <link rel="stylesheet" href="/static/css/deploy.css?v={{ asset_version }}" />
     <link rel="stylesheet" href="/static/css/logs.css?v={{ asset_version }}" />
-    <link rel="stylesheet" href="/static/css/ros.css?v={{ asset_version }}" />
     <link rel="stylesheet" href="/static/css/chat.css?v={{ asset_version }}" />
     <link rel="stylesheet" href="/static/css/guide.css?v={{ asset_version }}" />
     <link rel="stylesheet" href="/static/css/feishu-doc.css?v={{ asset_version }}" />
@@ -57,12 +56,6 @@
                 <svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg>
               </span>
               <span class="side-nav-label">日志</span>
-            </button>
-            <button type="button" class="side-nav-item" data-page-target="ros" aria-selected="false">
-              <span class="side-nav-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M7.8 11 16 7"/><path d="M7.8 13 16 17"/></svg>
-              </span>
-              <span class="side-nav-label">ROS 接口</span>
             </button>
             <button type="button" class="side-nav-item" data-page-target="chat" aria-selected="false">
               <span class="side-nav-icon" aria-hidden="true">
@@ -595,182 +588,6 @@
             </section>
           </section>
 
-          <section class="page-panel" data-page-panel="ros" hidden>
-            <section class="panel ros-page-panel">
-              <div class="panel-title ros-panel-title">
-                <span>01</span>
-                <h2>ROS 接口</h2>
-              </div>
-              <div class="ros-page-intro">
-                <div class="ros-page-head">
-                  <div class="ros-page-banner-copy">
-                    <strong>查询并执行 topics 与 services 交互</strong>
-                    <p id="rosPageHint">提示：点击右上角按钮可刷新列表</p>
-                  </div>
-                  <div class="button-row ros-page-toolbar">
-                    <button type="button" class="ghost" id="refreshRosTopicsBtn">刷新 Topics</button>
-                    <button type="button" class="ghost" id="refreshRosServicesBtn">刷新 Services</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="guide-subnav ros-subnav" role="tablist" aria-label="ROS 子页面">
-                <button type="button" class="guide-subnav-item is-active" data-ros-target="topic" aria-selected="true">Topic 接口</button>
-                <button type="button" class="guide-subnav-item" data-ros-target="service" aria-selected="false">Service 接口</button>
-              </div>
-              <div class="guide-subpages ros-subpages">
-                <section class="ros-subpage is-active" data-ros-panel="topic">
-                  <div class="ros-layout ros-layout-topic">
-                    <article class="ros-card ros-topic-list-card">
-                      <div class="ros-card-head">
-                        <h3 class="ros-card-title">Topic 列表</h3>
-                      </div>
-                      <label class="ros-search-shell" aria-label="搜索 topic">
-                        <input id="rosTopicSearchInput" type="text" placeholder="搜索 topic 名称" autocomplete="off" />
-                        <span class="ros-search-icon" aria-hidden="true">
-                          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
-                        </span>
-                      </label>
-                      <div id="rosTopicList" class="ros-name-list"></div>
-                      <div class="ros-topic-list-foot">
-                        <span id="rosTopicListCount">共 0 个 Topics</span>
-                      </div>
-                    </article>
-
-                    <article class="ros-card ros-topic-detail-card">
-                      <div class="ros-card-head">
-                        <h3 class="ros-card-title">Topic 详情</h3>
-                      </div>
-                      <div class="ros-topic-summary-card">
-                        <div class="ros-topic-summary-item ros-topic-summary-main">
-                          <span class="ros-topic-summary-label">当前 Topic</span>
-                          <div class="ros-topic-summary-value-row">
-                            <strong id="rosSelectedTopicName">未选择 Topic</strong>
-                            <span id="rosTopicAvailabilityBadge" class="ros-availability-badge">未查询</span>
-                          </div>
-                        </div>
-                        <div class="ros-topic-summary-item">
-                          <span class="ros-topic-summary-label">类型</span>
-                          <strong id="rosSelectedTopicType">-</strong>
-                        </div>
-                        <div class="ros-topic-summary-item">
-                          <span class="ros-topic-summary-label">方向</span>
-                          <strong id="rosSelectedTopicDirection">-</strong>
-                        </div>
-                      </div>
-                      <div class="ros-history-section">
-                        <strong>消息定义（msg）</strong>
-                        <pre id="rosTopicDefinitionOutput" class="log-output ros-detail-output ros-definition-output">选择 Topic 后，这里会显示对应的 msg 定义。</pre>
-                      </div>
-                      <div class="ros-mode-tabs" role="tablist" aria-label="Topic 交互模式">
-                        <button type="button" class="ros-mode-tab is-active" id="rosPublishTabBtn" data-ros-tab="publish" aria-selected="true">发布 (Publish)</button>
-                        <button type="button" class="ros-mode-tab" id="rosSubscribeTabBtn" data-ros-tab="subscribe" aria-selected="false">订阅 (Subscribe)</button>
-                      </div>
-                      <div class="ros-mode-panel is-active" id="rosPublishPanel" data-ros-tab-panel="publish">
-                        <label class="full">
-                          消息类型
-                          <input id="rosTopicPubTypeInput" type="text" placeholder="例如 std_msgs/String" autocomplete="off" />
-                        </label>
-                        <label class="full">
-                          消息内容（JSON 格式）
-                          <textarea id="rosTopicPubMessageInput" rows="5" placeholder='{
-  "data": "hello"
-}'></textarea>
-                        </label>
-                        <p class="helper-text">示例：`{"data": "hello"}`</p>
-                        <div class="button-row ros-action-row">
-                          <button type="button" class="primary" id="rosTopicPubBtn">发布消息</button>
-                          <button type="button" class="ghost" id="rosTopicPubPythonBtn">Python 发布示例</button>
-                        </div>
-                        <div class="ros-output-shell">
-                          <button type="button" class="ghost ros-output-copy-btn" id="rosTopicPubPythonCopyBtn">复制示例</button>
-                          <pre id="rosTopicPublishOutput" class="log-output ros-detail-output">选择 Topic 后，可在这里查看发布结果或 Python 发布示例。</pre>
-                        </div>
-                        <div class="ros-history-section">
-                          <strong>最近发布记录</strong>
-                          <div id="rosTopicPublishHistory" class="ros-history-card">暂无发布记录</div>
-                        </div>
-                      </div>
-                      <div class="ros-mode-panel" id="rosSubscribePanel" data-ros-tab-panel="subscribe" hidden>
-                        <div class="button-row ros-action-row ros-subscribe-actions">
-                          <button type="button" class="ghost" id="rosTopicInfoBtn">rostopic info</button>
-                          <button type="button" class="ghost" id="rosTopicTypeBtn">rostopic type</button>
-                          <button type="button" class="ghost" id="rosTopicEchoBtn">rostopic echo -n 1</button>
-                          <button type="button" class="ghost" id="rosTopicSubPythonBtn">Python 订阅示例</button>
-                        </div>
-                        <div class="ros-output-shell">
-                          <button type="button" class="ghost ros-output-copy-btn" id="rosTopicSubPythonCopyBtn">复制示例</button>
-                          <pre id="rosTopicDetailOutput" class="log-output ros-detail-output">选择 Topic 后，点击上方按钮查看结果。</pre>
-                        </div>
-                      </div>
-                    </article>
-                  </div>
-                </section>
-                <section class="ros-subpage" data-ros-panel="service" hidden>
-                  <div class="ros-layout ros-layout-topic ros-layout-service">
-                    <article class="ros-card ros-service-list-card">
-                      <div class="ros-card-head">
-                        <h3 class="ros-card-title">Service 列表</h3>
-                      </div>
-                      <label class="ros-search-shell" aria-label="搜索 service">
-                        <input id="rosServiceSearchInput" type="text" placeholder="搜索 service 名称" autocomplete="off" />
-                        <span class="ros-search-icon" aria-hidden="true">
-                          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
-                        </span>
-                      </label>
-                      <div id="rosServiceList" class="ros-name-list"></div>
-                      <div class="ros-topic-list-foot">
-                        <span id="rosServiceListCount">共 0 个 Services</span>
-                      </div>
-                    </article>
-
-                    <article class="ros-card ros-service-detail-card">
-                      <div class="ros-card-head">
-                        <h3 class="ros-card-title">Service 详情</h3>
-                      </div>
-                      <div class="ros-topic-summary-card">
-                        <div class="ros-topic-summary-item ros-topic-summary-main">
-                          <span class="ros-topic-summary-label">当前 Service</span>
-                          <div class="ros-topic-summary-value-row">
-                            <strong id="rosSelectedServiceName">未选择 Service</strong>
-                          </div>
-                        </div>
-                        <div class="ros-topic-summary-item">
-                          <span class="ros-topic-summary-label">类型</span>
-                          <strong id="rosSelectedServiceType">-</strong>
-                        </div>
-                        <div class="ros-topic-summary-item">
-                          <span class="ros-topic-summary-label">交互</span>
-                          <strong>call</strong>
-                        </div>
-                      </div>
-                      <div class="ros-history-section">
-                        <strong>服务定义（srv）</strong>
-                        <pre id="rosServiceDefinitionOutput" class="log-output ros-detail-output ros-definition-output">选择 Service 后，这里会显示对应的 srv 定义。</pre>
-                      </div>
-                      <div class="button-row ros-action-row ros-service-actions">
-                        <button type="button" class="ghost" id="rosServiceInfoBtn">rosservice info</button>
-                        <button type="button" class="ghost" id="rosServiceTypeBtn">rosservice type</button>
-                        <button type="button" class="ghost" id="rosServicePythonBtn">Python 调用示例</button>
-                      </div>
-                      <label class="full">
-                        call 请求体
-                        <textarea id="rosServiceCallRequestInput" rows="5" placeholder='例如 {"data": "hello"}'></textarea>
-                      </label>
-                      <div class="button-row ros-action-row">
-                        <button type="button" class="ghost" id="rosServiceCallBtn">rosservice call</button>
-                      </div>
-                      <div class="ros-output-shell">
-                        <button type="button" class="ghost ros-output-copy-btn" id="rosServicePythonCopyBtn">复制示例</button>
-                        <pre id="rosServiceDetailOutput" class="log-output ros-detail-output ros-service-output">选择 Service 后，点击上方按钮查看结果。</pre>
-                      </div>
-                    </article>
-                  </div>
-                </section>
-              </div>
-            </section>
-          </section>
-
           <section class="page-panel" data-page-panel="chat" hidden>
             <section class="panel chat-page-panel">
               <div class="panel-title">
@@ -1002,7 +819,6 @@
     <script defer src="/static/js/chat.js?v={{ asset_version }}"></script>
     <script defer src="/static/js/feishu-doc.js?v={{ asset_version }}"></script>
     <script defer src="/static/js/logs.js?v={{ asset_version }}"></script>
-    <script defer src="/static/js/ros.js?v={{ asset_version }}"></script>
     <script defer src="/static/js/deploy.js?v={{ asset_version }}"></script>
     <script defer src="/static/js/remote.js?v={{ asset_version }}"></script>
     <script defer src="/static/js/bootstrap.js?v={{ asset_version }}"></script>

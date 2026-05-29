@@ -15,9 +15,6 @@ function switchPage(pageName = "remote") {
   if (window.location.hash !== `#${normalizedPage}`) {
     window.history.replaceState(null, "", `#${normalizedPage}`);
   }
-  if (normalizedPage === "ros") {
-    ensureRosPageLoaded();
-  }
 }
 /* navigation.js */
 pageNavButtons.forEach((button) => {

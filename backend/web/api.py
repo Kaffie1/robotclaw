@@ -51,21 +51,8 @@ from ..shared import (
     reset_chat_state,
     resolve_download_source_path,
 )
-from ..core.models import ApiError, ConnectPayload, ConnectionConfig, ExecutePayload, RosServiceCallPayload, RosTopicPublishPayload, ToolCallPayload
+from ..core.models import ApiError, ConnectPayload, ConnectionConfig, ExecutePayload, ToolCallPayload
 from ..shared.runtime import connection_cache_store, deploy_config_store, history_store, session_store, task_manager, templates, upload_progress_manager
-from ..tools.ros import (
-    ros_list_services,
-    ros_list_topics,
-    ros_message_definition,
-    ros_service_call,
-    ros_service_definition_by_name,
-    ros_service_info,
-    ros_service_type,
-    ros_topic_echo,
-    ros_topic_info,
-    ros_topic_publish,
-    ros_topic_type,
-)
 from ..operations.workflow import (
     create_package_target_client,
     create_package_workflow_task_runner,
@@ -647,61 +634,6 @@ def create_app() -> FastAPI:
             "session_id": get_session_id(request),
             "connected": bool(session["client"].connected),
         }
-
-    @app.get("/api/ros/topics")
-    def api_ros_topics(request: Request):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_list_topics(client)}
-
-    @app.get("/api/ros/services")
-    def api_ros_services(request: Request):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_list_services(client)}
-
-    @app.get("/api/ros/topic-info")
-    def api_ros_topic_info(request: Request, name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_topic_info(client, name)}
-
-    @app.get("/api/ros/topic-type")
-    def api_ros_topic_type(request: Request, name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_topic_type(client, name)}
-
-    @app.get("/api/ros/message-definition")
-    def api_ros_message_definition(request: Request, type_name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_message_definition(client, type_name)}
-
-    @app.get("/api/ros/topic-echo")
-    def api_ros_topic_echo(request: Request, name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_topic_echo(client, name, timeout=15.0, line_limit=120)}
-
-    @app.post("/api/ros/topic-pub")
-    def api_ros_topic_pub(payload: RosTopicPublishPayload, request: Request):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_topic_publish(client, payload.name, payload.message_type, payload.message)}
-
-    @app.get("/api/ros/service-info")
-    def api_ros_service_info(request: Request, name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_service_info(client, name)}
-
-    @app.get("/api/ros/service-type")
-    def api_ros_service_type(request: Request, name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_service_type(client, name)}
-
-    @app.get("/api/ros/service-definition")
-    def api_ros_service_definition(request: Request, name: str = ""):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_service_definition_by_name(client, name)}
-
-    @app.post("/api/ros/service-call")
-    def api_ros_service_call(payload: RosServiceCallPayload, request: Request):
-        client = ensure_client_connected(get_session(request))
-        return {"ok": True, **ros_service_call(client, payload.name, payload.request)}
 
     @app.get("/api/deploy-target")
     def api_deploy_target(request: Request, file_name: str = "", machine_type: str = "", device_type: str = "ORIN"):
