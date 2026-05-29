@@ -43,7 +43,6 @@ def create_module_workflow_task_runner(
     module_path: str,
     package_sources: list[dict[str, Any]],
     upload_token: str,
-    auto_deploy: bool = False,
     owner_id: str = "",
 ):
     client = ensure_client_connected(session)
@@ -99,7 +98,6 @@ def create_module_workflow_task_runner(
             "module_path": module_path,
             "package_sources": package_sources,
             "upload_token": upload_token,
-            "auto_deploy": bool(auto_deploy),
         }
         set_runtime_value(workflow_context, "upload_token", upload_token)
         try:

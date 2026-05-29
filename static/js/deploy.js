@@ -1,190 +1,4 @@
 /* deploy.js */
-function setPackageAutoDeployHint(message, isError = false) {
-  if (!packageAutoDeployHint) {
-    return;
-  }
-  packageAutoDeployHint.textContent = message;
-  packageAutoDeployHint.classList.toggle("is-error", Boolean(isError));
-}
-
-function setModuleAutoDeployHint(message, isError = false) {
-  if (!moduleAutoDeployHint) {
-    return;
-  }
-  moduleAutoDeployHint.textContent = message;
-  moduleAutoDeployHint.classList.toggle("is-error", Boolean(isError));
-}
-
-function normalizeAutoDeployUrls(urls = []) {
-  return Array.isArray(urls)
-    ? urls.map((url) => String(url || "").trim()).filter(Boolean)
-    : [];
-}
-
-function normalizeAutoDeployModules(modules = []) {
-  if (!Array.isArray(modules)) {
-    return [];
-  }
-  return modules
-    .map((moduleItem) => ({
-      module: String(moduleItem?.module || "").trim(),
-      urls: normalizeAutoDeployUrls(moduleItem?.urls),
-    }))
-    .filter((moduleItem) => moduleItem.module && moduleItem.urls.length);
-}
-
-function getSelectedPackageAutoDeployConfig() {
-  const selectedVersion = String(packageAutoDeploySelect?.value || "").trim();
-  if (!selectedVersion) {
-    return null;
-  }
-  return packageAutoDeployConfigs.find((item) => item.version === selectedVersion) || null;
-}
-
-function getSelectedModuleAutoDeployConfig() {
-  const selectedVersion = String(moduleAutoDeploySelect?.value || "").trim();
-  const selectedModuleName = String(moduleSelect?.value || "").trim().toUpperCase();
-  if (!selectedVersion || !selectedModuleName) {
-    return { versionConfig: null, moduleConfig: null };
-  }
-  const versionConfig = moduleAutoDeployConfigs.find((item) => item.version === selectedVersion) || null;
-  const moduleConfig = versionConfig?.modules?.find((item) => String(item?.module || "").trim().toUpperCase() === selectedModuleName) || null;
-  return { versionConfig, moduleConfig };
-}
-
-function applyPackageAutoDeploySelection() {
-  const serverPathInput = packageDeployForm?.elements?.namedItem("server_file_path");
-  if (!(serverPathInput instanceof HTMLInputElement)) {
-    return;
-  }
-  const selectedConfig = getSelectedPackageAutoDeployConfig();
-  if (!selectedConfig) {
-    serverPathInput.readOnly = false;
-    serverPathInput.value = manualPackageServerFilePath;
-    serverPathInput.placeholder = DEFAULT_SERVER_FILE_PLACEHOLDER;
-    setPackageAutoDeployHint("注：选择自动部署版本后，不需要再上传 firmware 文件");
-    pendingPackageAutoDeployUrls = [];
-    return;
-  }
-  if (!manualPackageServerFilePath) {
-    manualPackageServerFilePath = String(serverPathInput.value || "").trim();
-  }
-  serverPathInput.value = "";
-  serverPathInput.readOnly = true;
-  serverPathInput.placeholder = `已选择 ${selectedConfig.version}，共 ${selectedConfig.urls.length} 个包，将自动依次部署`;
-  setPackageDeployFile(null);
-  pendingPackageAutoDeployUrls = [];
-  setPackageAutoDeployHint(`已选择自动部署版本：${selectedConfig.version}，将依次执行 ${selectedConfig.urls.length} 个包。`);
-}
-
-function applyModuleAutoDeploySelection() {
-  const serverPathInput = moduleDeployForm?.elements?.namedItem("server_file_path");
-  if (!(serverPathInput instanceof HTMLInputElement)) {
-    return;
-  }
-  const { versionConfig: selectedVersionConfig, moduleConfig: selectedModuleConfig } = getSelectedModuleAutoDeployConfig();
-  if (!selectedVersionConfig) {
-    serverPathInput.readOnly = false;
-    serverPathInput.value = manualModuleServerFilePath;
-    serverPathInput.placeholder = DEFAULT_SERVER_FILE_PLACEHOLDER;
-    setModuleAutoDeployHint("注：选择自动部署版本后，不需要再上传模块 deb 文件");
-    return;
-  }
-  if (!selectedModuleConfig) {
-    serverPathInput.readOnly = false;
-    serverPathInput.value = manualModuleServerFilePath;
-    serverPathInput.placeholder = DEFAULT_SERVER_FILE_PLACEHOLDER;
-    setModuleAutoDeployHint(`版本 ${selectedVersionConfig.version} 下未配置当前模块的包路径。`, true);
-    return;
-  }
-  if (!manualModuleServerFilePath) {
-    manualModuleServerFilePath = String(serverPathInput.value || "").trim();
-  }
-  serverPathInput.value = "";
-  serverPathInput.readOnly = true;
-  serverPathInput.placeholder = `已选择 ${selectedVersionConfig.version} / ${selectedModuleConfig.module}，共 ${selectedModuleConfig.urls.length} 个包`;
-  setModuleDeployFile(null);
-  setModuleAutoDeployHint(`已选择自动部署版本：${selectedVersionConfig.version}，模块 ${selectedModuleConfig.module} 将依次执行 ${selectedModuleConfig.urls.length} 个包。`);
-}
-
-function renderPackageAutoDeployOptions(items = []) {
-  if (!packageAutoDeploySelect) {
-    return;
-  }
-  packageAutoDeployConfigs = Array.isArray(items)
-    ? items.filter((item) => item && item.version && Array.isArray(item.urls) && item.urls.length)
-    : [];
-  const currentValue = String(packageAutoDeploySelect.value || "").trim();
-  packageAutoDeploySelect.replaceChildren();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "不使用自动部署，改为手动上传或填写服务器路径";
-  packageAutoDeploySelect.appendChild(placeholder);
-  packageAutoDeployConfigs.forEach((item) => {
-    const option = document.createElement("option");
-    option.value = item.version;
-    option.textContent = item.version;
-    if (currentValue && currentValue === option.value) {
-      option.selected = true;
-    }
-    packageAutoDeploySelect.appendChild(option);
-  });
-  applyPackageAutoDeploySelection();
-}
-
-function renderModuleAutoDeployOptions(items = []) {
-  if (!moduleAutoDeploySelect) {
-    return;
-  }
-  moduleAutoDeployConfigs = Array.isArray(items)
-    ? items.filter((item) => item && item.version && Array.isArray(item.modules) && item.modules.length)
-    : [];
-  const currentValue = String(moduleAutoDeploySelect.value || "").trim();
-  moduleAutoDeploySelect.replaceChildren();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "不使用自动部署，改为手动上传或填写服务器路径";
-  moduleAutoDeploySelect.appendChild(placeholder);
-  moduleAutoDeployConfigs.forEach((item) => {
-    const option = document.createElement("option");
-    option.value = item.version;
-    option.textContent = item.version;
-    if (currentValue && currentValue === option.value) {
-      option.selected = true;
-    }
-    moduleAutoDeploySelect.appendChild(option);
-  });
-  applyModuleAutoDeploySelection();
-}
-
-async function loadAutoDeployConfigs() {
-  if (!packageAutoDeploySelect && !moduleAutoDeploySelect) {
-    return;
-  }
-  try {
-    const response = await fetch(`/static/page_configs/deploy.auto.json?v=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const data = await response.json();
-    const packageItems = Array.isArray(data?.package) ? data.package.map((item) => ({
-      version: String(item?.version || "").trim(),
-      urls: normalizeAutoDeployUrls(item?.urls),
-    })) : [];
-    const moduleItems = Array.isArray(data?.module) ? data.module.map((item) => ({
-      version: String(item?.version || "").trim(),
-      modules: normalizeAutoDeployModules(item?.modules),
-    })) : [];
-    renderPackageAutoDeployOptions(packageItems);
-    renderModuleAutoDeployOptions(moduleItems);
-  } catch (error) {
-    renderPackageAutoDeployOptions([]);
-    renderModuleAutoDeployOptions([]);
-    setPackageAutoDeployHint(`自动部署配置加载失败：${error.message}`, true);
-    setModuleAutoDeployHint(`自动部署配置加载失败：${error.message}`, true);
-  }
-}
-/* deploy.js */
 function setPackageDeployHint(message, isError = false) {
   if (!packageDeployStageHint) {
     return;
@@ -244,7 +58,6 @@ function resetPackageDeployStage({ keepHint = false, keepMachineOptions = false,
   packageDeployStageState.remotePath = "";
   packageDeployStageState.remoteDir = "";
   packageDeployStageState.deviceType = String(packageDeviceType?.value || "ORIN").trim().toUpperCase() || "ORIN";
-  pendingPackageAutoDeployUrls = [];
   if (!keepMachineOptions) {
     packageDeployStageState.machineOptions = [];
     renderPackageMachineOptions([]);
@@ -332,10 +145,7 @@ function markModuleDeployFailed(message = "") {
   if (moduleSubmitBtn instanceof HTMLButtonElement) {
     moduleSubmitBtn.disabled = false;
   }
-  if (moduleAutoDeploySelect) {
-    moduleAutoDeploySelect.value = "";
-  }
-  setModuleAutoDeployHint(message ? `${message}，请重新上传模块 deb 文件后再试。` : "部署失败，请重新上传模块 deb 文件后再试。", true);
+  appendLog("模块部署失败", message || "请重新上传模块 deb 文件后再试。");
 }
 /* deploy.js */
 function formatBytes(bytes) {
@@ -775,36 +585,9 @@ packageDeviceType?.addEventListener("change", () => {
 const packageServerFilePathInput = packageDeployForm?.elements?.namedItem("server_file_path");
 if (packageServerFilePathInput instanceof HTMLInputElement) {
   packageServerFilePathInput.addEventListener("input", () => {
-    if (!packageAutoDeploySelect || !packageAutoDeploySelect.value) {
-      manualPackageServerFilePath = String(packageServerFilePathInput.value || "").trim();
-    }
     resetPackageDeployRuntimeState();
   });
 }
-
-packageAutoDeploySelect?.addEventListener("change", () => {
-  applyPackageAutoDeploySelection();
-  resetPackageDeployRuntimeState();
-});
-
-const moduleServerFilePathInput = moduleDeployForm?.elements?.namedItem("server_file_path");
-if (moduleServerFilePathInput instanceof HTMLInputElement) {
-  moduleServerFilePathInput.addEventListener("input", () => {
-    if (!moduleAutoDeploySelect || !moduleAutoDeploySelect.value) {
-      manualModuleServerFilePath = String(moduleServerFilePathInput.value || "").trim();
-    }
-  });
-}
-
-moduleAutoDeploySelect?.addEventListener("change", () => {
-  applyModuleAutoDeploySelection();
-});
-
-moduleSelect?.addEventListener("change", () => {
-  if (moduleAutoDeploySelect?.value) {
-    applyModuleAutoDeploySelection();
-  }
-});
 
 if (moduleDeployDropzone && moduleDeployFileInput) {
   moduleDeployDropzone.addEventListener("click", () => {
@@ -1230,38 +1013,6 @@ function finalizeUploadProgressFromTask(view, task) {
   }
 }
 
-function renderSequentialDeployProgress(view, {
-  completedCount = 0,
-  totalCount = 0,
-  currentFileLabel = "",
-  nextFileLabel = "",
-} = {}) {
-  if (!view) {
-    return;
-  }
-  const safeTotal = Math.max(1, Number(totalCount || 0));
-  const safeCompleted = Math.max(0, Math.min(safeTotal, Number(completedCount || 0)));
-  const percent = safeTotal > 0 ? (safeCompleted / safeTotal) * 100 : 0;
-  const currentLabel = String(currentFileLabel || "").trim();
-  const nextLabel = String(nextFileLabel || "").trim();
-  const text = nextLabel
-    ? `第 ${safeCompleted}/${safeTotal} 个包已完成，继续执行下一个包`
-    : `已完成 ${safeCompleted}/${safeTotal} 个包`;
-  const metaParts = [];
-  if (currentLabel) {
-    metaParts.push(`已完成: ${currentLabel}`);
-  }
-  if (nextLabel) {
-    metaParts.push(`下一包: ${nextLabel}`);
-  }
-  renderUploadProgress(view, {
-    percent,
-    text,
-    meta: metaParts.join(" · "),
-    state: "active",
-  });
-}
-
 function extractFileNameFromServerPath(rawPath) {
   const text = String(rawPath || "").trim().replaceAll("\\", "/");
   if (!text) {
@@ -1283,7 +1034,6 @@ async function resolveDeployConflict(
 ) {
   const selectedFile = formData.get(fileFieldName);
   const serverFilePath = String(formData.get(serverPathFieldName) || "").trim();
-  const autoDeploy = String(formData.get("auto_deploy") || "").trim().toLowerCase() === "true";
   const selectedFileName =
     selectedFile instanceof File && selectedFile.name ? selectedFile.name : extractFileNameFromServerPath(serverFilePath);
   if (!selectedFileName) {
@@ -1308,20 +1058,6 @@ async function resolveDeployConflict(
 
   if (!target.exists) {
     return { cancelled: false, skipBrowserUpload: Boolean(serverFilePath) };
-  }
-
-  if (autoDeploy) {
-    formData.set("use_existing_remote", "true");
-    formData.delete("replace_existing");
-    formData.delete(fileFieldName);
-    renderUploadProgress(progressView, {
-      percent: 100,
-      text: `检测到远端同名文件，自动跳过上传并继续${deployActionLabel(deployMode)}`,
-      meta: target.remote_path,
-      state: "active",
-    });
-    appendLog("自动部署检测到远端同名文件，已跳过替换", target.remote_path);
-    return { cancelled: false, skipBrowserUpload: true };
   }
 
   const replaceExisting = window.confirm(
@@ -1370,27 +1106,12 @@ async function resolveDeployConflictFromError(
   } = {},
 ) {
   const conflict = error && error.conflict;
-  const autoDeploy = String(formData.get("auto_deploy") || "").trim().toLowerCase() === "true";
   if (!conflict || !conflict.remote_path) {
     return { handled: false };
   }
 
   if (deployMode === "package") {
     return { handled: false };
-  }
-
-  if (autoDeploy) {
-    formData.set("use_existing_remote", "true");
-    formData.delete("replace_existing");
-    formData.delete(fileFieldName);
-    renderUploadProgress(progressView, {
-      percent: 100,
-      text: `检测到远端同名文件，自动跳过上传并继续${deployActionLabel(deployMode)}`,
-      meta: conflict.remote_path,
-      state: "active",
-    });
-    appendLog("自动部署检测到远端同名文件，已跳过替换", conflict.remote_path);
-    return { handled: true, cancelled: false, skipBrowserUpload: true };
   }
 
   const replaceExisting = window.confirm(
@@ -1865,15 +1586,6 @@ async function submitPackageDeployStart(event) {
   event.preventDefault();
   const formData = new FormData(event.currentTarget);
   const deviceType = String(formData.get("device_type") || "ORIN").trim().toUpperCase() || "ORIN";
-  const autoDeployConfig = getSelectedPackageAutoDeployConfig();
-  const autoDeployUrls = autoDeployConfig?.urls || [];
-  if (autoDeployUrls.length) {
-    formData.set("auto_deploy", "true");
-    formData.set("server_file_path", autoDeployUrls[0]);
-    formData.delete("deb_file");
-  } else {
-    formData.delete("auto_deploy");
-  }
   formData.set("device_type", deviceType);
   formData.set("machine_type", "");
   const firstTask = await createPackageDeployTask(formData, {
@@ -1908,16 +1620,11 @@ async function submitPackageDeployStart(event) {
     machineOptions,
     selectedMachineType,
   });
-  pendingPackageAutoDeployUrls = autoDeployUrls.length ? [...autoDeployUrls] : [];
   appendLog(
     "整包上传完成，等待 workflow 机型确认",
     `${checkpointTask?.metadata?.remote_path || ""}\n机型: ${machineOptions.map((item) => item.label || item.value).join(", ")}`,
   );
-  setPackageDeployHint(
-    autoDeployUrls.length > 1
-      ? `请先选择机型并点击“继续部署”，系统会按顺序执行当前版本下的 ${autoDeployUrls.length} 个包。`
-      : "请先选择机型并点击“继续部署”。"
-  );
+  setPackageDeployHint("请先选择机型并点击“继续部署”。");
 }
 
 async function submitPackageContinueDeployForm(formNode) {
@@ -1930,16 +1637,8 @@ async function submitPackageContinueDeployForm(formNode) {
   if (!packageDeployStageState.taskId) {
     throw new Error("当前没有等待确认的部署任务，请重新上传 firmware");
   }
-  const autoDeployUrls = Array.isArray(pendingPackageAutoDeployUrls) ? pendingPackageAutoDeployUrls.filter(Boolean) : [];
-  if (autoDeployUrls.length > 1) {
-    appendLog("开始自动顺序整包部署", `版本 ${packageAutoDeploySelect?.value || ""} 共 ${autoDeployUrls.length} 个包`);
-  }
   setPackageMachineAttention(false);
-  setPackageDeployHint(
-    autoDeployUrls.length > 1
-      ? `已确认机型 ${machineType}，正在继续部署当前版本下的 ${autoDeployUrls.length} 个包。`
-      : `已确认机型 ${machineType}，正在继续部署。`
-  );
+  setPackageDeployHint(`已确认机型 ${machineType}，正在继续部署。`);
   const continueResponse = await request(`/api/tasks/${packageDeployStageState.taskId}/continue`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1959,54 +1658,10 @@ async function submitPackageContinueDeployForm(formNode) {
     markPackageDeployFailed(firstResult.error || "首个整包部署任务执行失败");
     throw new Error(firstResult.error || "首个整包部署任务执行失败");
   }
-  if (autoDeployUrls.length > 1) {
-    renderSequentialDeployProgress(uploadProgressViews.packageDeploy, {
-      completedCount: 1,
-      totalCount: autoDeployUrls.length,
-      currentFileLabel: autoDeployUrls[0],
-      nextFileLabel: autoDeployUrls[1],
-    });
-    appendLog("自动顺序整包部署进度", `1/${autoDeployUrls.length} 已完成，继续执行 ${autoDeployUrls[1]}`);
-  } else {
-    finalizeUploadProgressFromTask(uploadProgressViews.packageDeploy, firstResult);
-  }
-
-  for (let index = 1; index < autoDeployUrls.length; index += 1) {
-    const serverFilePath = autoDeployUrls[index];
-    const nextFormData = new FormData(formNode);
-    nextFormData.set("device_type", deviceType);
-    nextFormData.set("machine_type", machineType);
-    nextFormData.set("server_file_path", serverFilePath);
-    nextFormData.delete("deb_file");
-    appendLog("继续自动顺序整包部署", `${index + 1}/${autoDeployUrls.length} ${serverFilePath}`);
-    const nextTask = await createPackageDeployTask(nextFormData, {
-      progressView: uploadProgressViews.packageDeploy,
-      tokenPrefix: "package-deploy",
-    });
-    if (!nextTask) {
-      return;
-    }
-    const nextResult = await waitForTaskCompletion(nextTask.id);
-    if (String(nextResult.status || "").trim().toLowerCase() === "failed") {
-      finalizeUploadProgressFromTask(uploadProgressViews.packageDeploy, nextResult);
-      markPackageDeployFailed(nextResult.error || `第 ${index + 1} 个整包部署任务执行失败`);
-      throw new Error(nextResult.error || `第 ${index + 1} 个整包部署任务执行失败`);
-    }
-    if (index < autoDeployUrls.length - 1) {
-      renderSequentialDeployProgress(uploadProgressViews.packageDeploy, {
-        completedCount: index + 1,
-        totalCount: autoDeployUrls.length,
-        currentFileLabel: serverFilePath,
-        nextFileLabel: autoDeployUrls[index + 1],
-      });
-      appendLog("自动顺序整包部署进度", `${index + 1}/${autoDeployUrls.length} 已完成，继续执行 ${autoDeployUrls[index + 1]}`);
-      continue;
-    }
-    finalizeUploadProgressFromTask(uploadProgressViews.packageDeploy, nextResult);
-  }
+  finalizeUploadProgressFromTask(uploadProgressViews.packageDeploy, firstResult);
 
   resetPackageDeployStage({ keepHint: true, keepMachineOptions: true, selectedMachineType: machineType });
-  setPackageDeployHint(autoDeployUrls.length > 1 ? "当前版本下的整包已按顺序执行完成。" : "已创建整包部署任务。如需部署其他 firmware，请重新选择文件。");
+  setPackageDeployHint("已创建整包部署任务。如需部署其他 firmware，请重新选择文件。");
   await refreshDashboard();
 }
 
@@ -2041,26 +1696,8 @@ async function submitModuleDeployForm(event) {
   if (!moduleName) {
     throw new Error("请选择要部署的模块");
   }
-  const { versionConfig: autoVersionConfig, moduleConfig: autoModuleConfig } = getSelectedModuleAutoDeployConfig();
-  const autoDeployUrls = autoModuleConfig?.urls || [];
-  if (autoDeployUrls.length) {
-    formData.set("auto_deploy", "true");
-    formData.set("server_file_paths_json", JSON.stringify(autoDeployUrls));
-    formData.delete("server_file_path");
-    formData.delete("deb_file");
-    appendLog("开始批量模块部署", `${autoVersionConfig?.version || ""} / ${moduleName} 共 ${autoDeployUrls.length} 个包，将先全部替换再统一执行部署`);
-    const task = await createModuleDeployTask(formData);
-    const result = await waitForTaskCompletion(task.id);
-    finalizeUploadProgressFromTask(uploadProgressViews.moduleDeploy, result);
-    if (String(result.status || "").trim().toLowerCase() === "failed") {
-      throw new Error(result.error || "批量模块部署执行失败");
-    }
-    appendLog("批量模块部署完成", `${autoVersionConfig?.version || ""} / ${moduleName}`);
-    return;
-  }
   const selectedFile = formData.get("deb_file");
   const serverFilePath = String(formData.get("server_file_path") || "").trim();
-  formData.delete("auto_deploy");
   if (!(selectedFile instanceof File) || !selectedFile.name) {
     if (!extractFileNameFromServerPath(serverFilePath)) {
       throw new Error("请选择要部署的模块 deb 文件或填写文件服务器包路径");

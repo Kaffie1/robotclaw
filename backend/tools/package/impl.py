@@ -133,8 +133,6 @@ def remote_stage_artifacts(
     target_root: str,
     target_mode: str,
     artifact_items: list[dict[str, Any]],
-    cleanup_existing_remote_files: bool,
-    auto_deploy: bool,
     upload_token: str,
     sudo_password: str,
 ) -> dict[str, Any]:
@@ -161,7 +159,7 @@ def remote_stage_artifacts(
                 message=f"正在上传到目标处理器: {resolved_remote_path}",
             )
 
-        if cleanup_existing_remote_files and client.path_exists(resolved_remote_path):
+        if client.path_exists(resolved_remote_path):
             client.remove_remote_path(resolved_remote_path)
             removed_files = [resolved_remote_path]
         upload_progress_manager.update(
@@ -187,7 +185,6 @@ def remote_stage_artifacts(
             "remote_dir": remote_dir,
             "removed_files": removed_files,
             "upload_skipped": False,
-            "cleanup_existing_remote_files": cleanup_existing_remote_files,
             "uploaded_bytes": file_size,
             "result": {"exit_code": 0, "stdout": output, "stderr": ""},
             "output": output,
@@ -222,29 +219,6 @@ def remote_stage_artifacts(
         temp_remote_path = client.resolve_remote_path(posixpath.join(PACKAGE_DEPLOY_DIR, package_file_name))
         remote_package_path = client.resolve_remote_path(posixpath.join(target_root, package_file_name))
         uploaded_file_paths.append(remote_package_path)
-        if auto_deploy and client.path_exists(remote_package_path):
-            package_summaries.append(
-                {
-                    "package_file_name": package_file_name,
-                    "package_prefix": package_prefix,
-                    "uploaded_file_path": remote_package_path,
-                    "removed_files": [],
-                    "source_kind": str(source_metadata.get("source_kind") or ""),
-                    "source_path": str(source_metadata.get("source_path") or ""),
-                    "download_path": str(source_metadata.get("download_path") or ""),
-                    "skipped_existing": True,
-                }
-            )
-            skipped_existing_files.append(remote_package_path)
-            upload_progress_manager.update(
-                upload_token,
-                transferred_bytes=transferred_total,
-                total_bytes=total_bytes,
-                phase="preparing",
-                message=f"[{package_index}/{total_count}] 检测到同名文件，已跳过替换: {package_file_name}",
-            )
-            continue
-
         package_summary = {
             "package_file_name": package_file_name,
             "package_prefix": package_prefix,

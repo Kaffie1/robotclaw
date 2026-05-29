@@ -235,7 +235,7 @@
                   </div>
                   <div class="deploy-overview-copy">
                     <strong>现场部署支持整包和模块两种流程</strong>
-                    <p>整包部署上传 firmware 包；模块部署选择固定模块名并上传新的 deb 文件。自动部署对应的包在deb包文档里面。</p>
+                    <p>整包部署上传 firmware 包；模块部署选择固定模块名并上传新的 deb 文件，也支持直接填写文件服务器包路径。</p>
                     <p class="helper-text is-error">注：模块部署仅支持 1.3.0 及以上版本，若版本是 1.3.0 ，升级完成后无法通过模块部署回退到 1.3.0 版本。</p>
                   </div>
                 </div>
@@ -264,15 +264,6 @@
                       <div class="deploy-section-card">
                       <div class="deploy-section-title">机型与设备</div>
                       <div class="deploy-field-shell">
-                        <label class="full">
-                          <span class="deploy-field-row">
-                            <span class="deploy-field-label">自动部署版本</span>
-                            <select name="auto_package_version" id="packageAutoDeploySelect">
-                              <option value="">不使用自动部署，改为手动上传或填写服务器路径</option>
-                            </select>
-                          </span>
-                        </label>
-                        <p id="packageAutoDeployHint" class="helper-text">注：选择自动部署版本后，不需要再上传 firmware 文件</p>
                         <label class="full">
                           <span class="deploy-field-row">
                               <span class="deploy-field-label">机型选择</span>
@@ -389,15 +380,6 @@
                       <div class="deploy-section-card">
                         <div class="deploy-section-title">模块与配置</div>
                         <div class="deploy-field-shell">
-                          <label class="full">
-                            <span class="deploy-field-row">
-                              <span class="deploy-field-label">自动部署版本</span>
-                            <select name="auto_module_version" id="moduleAutoDeploySelect">
-                                <option value="">不使用自动部署，改为手动上传或填写服务器路径</option>
-                              </select>
-                            </span>
-                          </label>
-                          <p id="moduleAutoDeployHint" class="helper-text">注：选择自动部署版本后，不需要再上传模块 deb 文件</p>
                           <label class="full">
                             <span class="deploy-field-row">
                               <span class="deploy-field-label">模块名</span>
@@ -597,11 +579,7 @@
               <div class="chat-main" id="chatMain">
                 <section class="chat-workspace">
                   <div class="chat-panel-title">
-                    <div class="chat-panel-title-main">
-                      <span class="chat-step">01</span>
-                      <h3>聊天助手</h3>
-                    </div>
-                    <button id="playbookToggleBtn" type="button" class="playbook-toggle-btn" aria-expanded="true">关闭流程图</button>
+                    <button id="playbookToggleBtn" type="button" class="playbook-toggle-btn" aria-expanded="false">展开流程图</button>
                   </div>
                   <div class="chat-intro-card">
                     <strong>先描述故障现象</strong>
@@ -663,7 +641,7 @@
               <div class="guide-hero">
                 <div class="guide-hero-copy">
                   <strong>按“连接 -> 选择部署方式 -> 查看后台任务 -> 导出日志”的顺序操作最稳妥</strong>
-                  <p>这里把现场最常用的流程、自动部署入口和异常处理建议整理到一起，尽量做到照着页面就能操作。</p>
+                  <p>这里把现场最常用的流程、部署入口和异常处理建议整理到一起，尽量做到照着页面就能操作。</p>
                 </div>
                 <div class="guide-hero-badge">OPS GUIDE</div>
               </div>
@@ -693,19 +671,19 @@
                     </li>
                     <li>
                       <strong>进入“部署”页，按实际场景选择部署方式</strong>
-                      <p>整包部署用于 firmware 升级；模块部署用于替换单个模块 deb。如果页面里已经配置了自动部署版本，优先从“自动部署版本”下拉中选择；如果包已经放在文件服务器上，也可以直接填写“文件服务器包路径”，不必本地上传。</p>
+                      <p>整包部署用于 firmware 升级；模块部署用于替换单个模块 deb。如果包已经放在文件服务器上，也可以直接填写“文件服务器包路径”，不必本地上传。</p>
                     </li>
                     <li>
                       <strong>按页面要求选择文件或填写服务器路径，然后创建任务</strong>
-                      <p>整包部署选择 firmware 文件；模块部署选择对应模块并上传 deb。若选择了自动部署版本，页面会自动带出包路径并跳过本地上传。确认信息无误后点击对应按钮，任务会进入后台执行。</p>
+                      <p>整包部署选择 firmware 文件；模块部署选择对应模块并上传 deb。确认信息无误后点击对应按钮，任务会进入后台执行。</p>
                     </li>
                     <li>
                       <strong>整包部署上传后先选机型，再点击“继续部署”</strong>
-                      <p>整包 firmware 上传完成后，系统会先识别可选机型，并尝试读取远端 `ROBOT_TYPE`。你需要确认机型下拉框里的值是否正确，然后点击“继续部署”；如果没有做这一步，流程会停在等待继续的状态。若选择的是自动部署版本，点击一次“继续部署”后，系统会按顺序把当前版本下的整包依次执行完。</p>
+                      <p>整包 firmware 上传完成后，系统会先识别可选机型，并尝试读取远端 `ROBOT_TYPE`。你需要确认机型下拉框里的值是否正确，然后点击“继续部署”；如果没有做这一步，流程会停在等待继续的状态。</p>
                     </li>
                     <li>
                       <strong>在“后台任务”中持续查看状态、结果和执行日志</strong>
-                      <p>任务会依次显示等待中、执行中、成功、成功但有告警或失败。点击任务后可以查看完整后台日志；如需把结果发给他人排查，可以直接使用“复制日志”。模块自动部署会先批量替换文件，再统一执行部署。</p>
+                      <p>任务会依次显示等待中、执行中、成功、成功但有告警或失败。点击任务后可以查看完整后台日志；如需把结果发给他人排查，可以直接使用“复制日志”。</p>
                     </li>
                     <li>
                       <strong>部署异常时进入“日志”页导出 ORIN / PICO 日志</strong>
@@ -721,7 +699,7 @@
                   </div>
                   <ul class="guide-checklist">
                     <li>确认机器人与当前电脑网络互通，主机、端口、用户名、密码填写正确，避免在部署时才发现连接失败。</li>
-                    <li>整包部署优先准备 `.firmware` 文件；模块部署准备目标模块对应的 `.deb` 文件；如果使用自动部署版本，先确认版本下拉中已经有正确的版本配置。</li>
+                    <li>整包部署优先准备 `.firmware` 文件；模块部署准备目标模块对应的 `.deb` 文件；如果包已在文件服务器，可直接填写服务器路径。</li>
                     <li>如果安装包已经放在文件服务器上，可以直接填写“文件服务器包路径”，这样可以跳过本地文件选择和浏览器上传；路径为空时才会使用本地上传文件。</li>
                     <li>模块部署前确认模块名选择正确；`COMPOSE_PROFILES` 会由系统从机器人宿主机自动读取，不需要手动填写。</li>
                     <li>如果要部署 PICO 或导出 PICO 日志，请在连接 ORIN 的同时补全 PICO 的主机、端口、用户名和密码；PICO 相关操作依赖 ORIN 跳板。</li>
@@ -736,11 +714,11 @@
                   <div class="guide-mode-list">
                     <section class="guide-mode-item">
                       <strong>整包部署</strong>
-                      <p>适合整机升级或现场整包覆盖。第一步是上传 firmware 或读取服务器包路径，第二步是确认机型并点击“继续部署”。如果选择了自动部署版本，系统会在你确认机型后按顺序完成当前版本下的整包部署。</p>
+                      <p>适合整机升级或现场整包覆盖。第一步是上传 firmware 或读取服务器包路径，第二步是确认机型并点击“继续部署”。</p>
                     </section>
                     <section class="guide-mode-item">
                       <strong>模块部署</strong>
-                      <p>适合替换单个模块。选择模块名并上传对应的 deb 后，系统会清理该模块目录下同前缀的旧包，再执行容器重启相关操作；如果使用自动部署版本，同一模块下配置的多个包会先批量替换，再统一执行部署。</p>
+                      <p>适合替换单个模块。选择模块名并上传对应的 deb 后，系统会清理该模块目录下同前缀的旧包，再执行容器重启相关操作。</p>
                     </section>
                   </div>
                 </article>
@@ -786,7 +764,7 @@
                     </section>
                     <section class="guide-tip-item">
                       <strong>上传后无法继续</strong>
-                      <p>整包部署必须在识别机型后手动选择机型并点击“继续部署”；如果下拉没有机型选项，先查看任务日志，确认 firmware 包是否有效、识别命令是否执行成功，以及是否已经错误地填写了文件服务器路径或自动部署版本。</p>
+                      <p>整包部署必须在识别机型后手动选择机型并点击“继续部署”；如果下拉没有机型选项，先查看任务日志，确认 firmware 包是否有效、识别命令是否执行成功，以及是否已经错误地填写了文件服务器路径。</p>
                     </section>
                     <section class="guide-tip-item">
                       <strong>部署失败</strong>

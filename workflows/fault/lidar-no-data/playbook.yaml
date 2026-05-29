@@ -27,7 +27,7 @@ playbooks:
             count: 1
             timeout_seconds: 2
           assert_ref: rule_1
-          failure_message: 192.168.217.17 不通，先确保通信正常
+          failure_message: 192.168.217.17 不通，先确保通信正常，可参考飞书云文档中的mid360操作文档
         - type: action
           name: docker_compose_down_sensor_lidar
           display_name: 关闭激光容器
@@ -52,7 +52,7 @@ playbooks:
           failure_message: sensor_lidar 容器启动失败，请询问相关人员
         - type: condition
           name: check_lidar_point_num
-          display_name: 检查激光点云数据
+          display_name: 检查激光点云数据中
           progress:
             phase: verifying
             message: 正在检查激光点云数据

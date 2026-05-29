@@ -10,16 +10,12 @@ const remoteCacheSelectShell = document.querySelector(".remote-cache-select-main
 const packageDeployForm = document.getElementById("packageDeployForm");
 const packageMachineType = document.getElementById("packageMachineType");
 const packageDeviceType = document.getElementById("packageDeviceType");
-const packageAutoDeploySelect = document.getElementById("packageAutoDeploySelect");
-const packageAutoDeployHint = document.getElementById("packageAutoDeployHint");
 const packageDeployDropzone = document.getElementById("packageDeployDropzone");
 const packageDeployFileInput = document.getElementById("packageDeployFileInput");
 const packageDeployFileMeta = document.getElementById("packageDeployFileMeta");
 const packageDeploySubmitBtn = document.getElementById("packageDeploySubmitBtn");
 const packageDeployStageHint = document.getElementById("packageDeployStageHint");
 const moduleDeployForm = document.getElementById("moduleDeployForm");
-const moduleAutoDeploySelect = document.getElementById("moduleAutoDeploySelect");
-const moduleAutoDeployHint = document.getElementById("moduleAutoDeployHint");
 const moduleDeployDropzone = document.getElementById("moduleDeployDropzone");
 const moduleDeployFileInput = document.getElementById("moduleDeployFileInput");
 const moduleDeployFileMeta = document.getElementById("moduleDeployFileMeta");
@@ -101,12 +97,6 @@ const packageDeployStageState = {
   machineOptions: [],
 };
 let packageDeployRequestInFlight = false;
-let packageAutoDeployConfigs = [];
-let moduleAutoDeployConfigs = [];
-let manualPackageServerFilePath = "";
-let manualModuleServerFilePath = "";
-let pendingPackageAutoDeployUrls = [];
-const DEFAULT_SERVER_FILE_PLACEHOLDER = "填写服务器包路径；留空时使用本地上传";
 const chatState = {
   messages: [],
   pending: false,

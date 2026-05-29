@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..core.config import TRACE_LOG_PATH
+from ..core.config import RUNTIME_TRACE_ENABLED, TRACE_LOG_PATH
 
 
 def setup_runtime_logger() -> logging.Logger:
@@ -57,6 +57,10 @@ def setup_runtime_trace_logger() -> logging.Logger:
         return logger
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
+
+    if not RUNTIME_TRACE_ENABLED:
+        logger.addHandler(logging.NullHandler())
+        return logger
 
     log_path = Path(TRACE_LOG_PATH)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +127,8 @@ def truncate_trace_value(value: Any, *, depth: int = 0) -> Any:
 
 
 def append_runtime_trace(event: str, payload: dict[str, Any]) -> None:
+    if not RUNTIME_TRACE_ENABLED:
+        return
     record = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "event": event,

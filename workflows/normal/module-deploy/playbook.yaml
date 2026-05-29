@@ -16,8 +16,6 @@ playbooks:
       module_path: { type: string, source: input }
       package_sources: { type: list, source: input }
       upload_token: { type: string, source: input }
-      auto_deploy: { type: boolean, source: input }
-
       # 安装包准备 / 上传阶段产生的运行时字段
       file_name: { type: string, source: runtime }
       file_size: { type: integer, source: runtime }
@@ -63,8 +61,6 @@ playbooks:
             target_mode: directory
             artifact_items:
               from_context: package_files
-            auto_deploy:
-              from_context: auto_deploy
             upload_token:
               from_context: upload_token
           assert_ref: rule_2

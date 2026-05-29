@@ -31,10 +31,8 @@ def _append_stage_logs(ctx: TaskContext, stage_payload: dict[str, Any], source_m
         ctx.log("清理目标目录中同名旧安装包")
         for removed_file in removed_files:
             ctx.log(f"已删除旧包: {removed_file}")
-    elif bool(stage_payload.get("cleanup_existing_remote_files")):
-        ctx.log("目标目录没有需要清理的同名旧安装包")
     else:
-        ctx.log("跳过同名旧安装包清理，直接上传新的安装包")
+        ctx.log("目标目录没有需要清理的同名旧安装包")
     ctx.log(f"上传安装包到 {stage_payload.get('resolved_remote_path') or stage_payload.get('remote_deb_path')}")
 
 
@@ -93,7 +91,6 @@ def create_package_workflow_task_runner(
     rollback_template: str,
     file_name: str,
     source_metadata: dict[str, Any] | None = None,
-    cleanup_existing_remote_files: bool = True,
     upload_token: str = "",
     owner_id: str = "",
 ):
@@ -121,7 +118,6 @@ def create_package_workflow_task_runner(
             "target_host": str(target.get("host") or ""),
             "target_port": int(target.get("port") or 22),
             "target_username": str(target.get("username") or ""),
-            "cleanup_existing_remote_files": cleanup_existing_remote_files,
             "source_metadata": resolved_source_metadata,
             "warnings": warnings,
         }
@@ -135,7 +131,6 @@ def create_package_workflow_task_runner(
             "rollback_command": "",
             "machine_type": machine_type,
             "device_type": str(target.get("device_type") or device_type),
-            "cleanup_existing_remote_files": cleanup_existing_remote_files,
         }
         ctx.log(f"目标机器人: {identity['robot_username']}@{identity['robot_host']}:{identity['robot_port']}")
         if machine_type:
@@ -153,7 +148,6 @@ def create_package_workflow_task_runner(
                 "machine_type": machine_type,
                 "device_type": str(target.get("device_type") or device_type).upper(),
                 "file_name": file_name,
-                "cleanup_existing_remote_files": cleanup_existing_remote_files,
                 "upload_token": upload_token,
                 "source_metadata": resolved_source_metadata,
             }
@@ -235,7 +229,6 @@ def create_package_workflow_task_runner(
             if stage_payload:
                 summary["removed_files"] = stage_payload.get("removed_files") or []
                 summary["upload_skipped"] = bool(stage_payload.get("upload_skipped"))
-                summary["cleanup_existing_remote_files"] = bool(stage_payload.get("cleanup_existing_remote_files"))
                 resolved_stage_remote_path = str(stage_payload.get("resolved_remote_path") or "").strip()
                 if resolved_stage_remote_path:
                     summary["remote_deb_path"] = resolved_stage_remote_path

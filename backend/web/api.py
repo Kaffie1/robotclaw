@@ -650,13 +650,12 @@ def create_app() -> FastAPI:
                 client.close()
 
     @app.post("/api/deploy")
-    def api_deploy(request: Request, machine_type: str = Form(""), device_type: str = Form("ORIN"), server_file_path: str = Form(""), auto_deploy: str = Form(""), upload_token: str = Form(""), deb_file: UploadFile | None = File(None)):
-        """部署接口，支持上传安装包文件或指定服务器文件路径，并根据部署配置自动选择部署方案"""
+    def api_deploy(request: Request, machine_type: str = Form(""), device_type: str = Form("ORIN"), server_file_path: str = Form(""), upload_token: str = Form(""), deb_file: UploadFile | None = File(None)):
+        """部署接口，支持上传安装包文件或指定服务器文件路径"""
         """request: 请求对象
             machine_type: 机器类型，用于选择部署配置
             device_type: 设备类型，用于选择部署目标
             server_file_path: 服务器文件路径，用于从文件服务器下载安装包
-            auto_deploy: 是否自动部署，如果为true且部署配置中auto_rollback为true，则部署失败时会自动执行回滚，true/false，默认为false
             upload_token: 上传进度标识，用于文件上传和服务器下载进度的关联
             deb_file: 上传的安装包文件，可选，如果提供则优先使用该文件进行部署，否则使用server_file_path指定的服务器文件路径"""
         session = get_session(request)
@@ -681,7 +680,6 @@ def create_app() -> FastAPI:
                 rollback_template=deploy_profile["rollback_template"],
                 file_name=selected_file_name,
                 source_metadata=source_metadata,
-                cleanup_existing_remote_files=True,
                 upload_token=str(upload_token or "").strip(),
                 owner_id=session_id,
             )
@@ -711,64 +709,35 @@ def create_app() -> FastAPI:
         request: Request,
         module_name: str = Form(""),
         server_file_path: str = Form(""),
-        server_file_paths_json: str = Form(""),
-        auto_deploy: str = Form(""),
         upload_token: str = Form(""),
         deb_file: UploadFile | None = File(None),
     ):
         session = get_session(request)
         session_id = get_session_id(request)
         client = ensure_client_connected(session)
-        auto_deploy_flag = parse_bool(auto_deploy)
         selected_module_name = require_text(module_name, "请选择要部署的模块")
         selected_module_path = client.resolve_remote_path(posixpath.join(MODULE_DEPLOY_ROOT, selected_module_name))
         if not client.path_exists(selected_module_path):
             raise ApiError(f"模块目录不存在: {selected_module_path}")
         if not client.is_dir_path(selected_module_path):
             raise ApiError(f"模块路径不是目录: {selected_module_path}")
-        package_sources: list[dict[str, Any]] = []
-        batch_server_paths: list[str] = []
-        if str(server_file_paths_json or "").strip():
-            try:
-                raw_paths = json.loads(server_file_paths_json)
-            except json.JSONDecodeError as exc:
-                raise ApiError(f"自动部署包路径配置解析失败: {exc}") from exc
-            if not isinstance(raw_paths, list):
-                raise ApiError("自动部署包路径格式错误，应为数组")
-            batch_server_paths = [str(item or "").strip() for item in raw_paths if str(item or "").strip()]
-        if batch_server_paths:
-            for path in batch_server_paths:
-                package_file_name, source_metadata = prepare_package_source(
-                    None,
-                    path,
-                    local_error_message="请选择要部署的模块 deb 文件或填写文件服务器包路径",
-                )
-                package_sources.append(
-                    {
-                        "package_file_name": package_file_name,
-                        "source_metadata": source_metadata,
-                    }
-                )
-        else:
-            package_file_name, source_metadata = prepare_package_source(
-                deb_file,
-                server_file_path,
-                local_error_message="请选择要部署的模块 deb 文件或填写文件服务器包路径",
-            )
-            package_sources.append(
-                {
-                    "package_file_name": package_file_name,
-                    "source_metadata": source_metadata,
-                }
-            )
-        deploy_profile = deploy_config_store.get_profile("module", selected_module_name)
+        package_file_name, source_metadata = prepare_package_source(
+            deb_file,
+            server_file_path,
+            local_error_message="请选择要部署的模块 deb 文件或填写文件服务器包路径",
+        )
+        package_sources = [
+            {
+                "package_file_name": package_file_name,
+                "source_metadata": source_metadata,
+            }
+        ]
         title, metadata, runner = create_module_workflow_task_runner(
             session,
             module_name=selected_module_name,
             module_path=selected_module_path,
             package_sources=package_sources,
             upload_token=str(upload_token or "").strip(),
-            auto_deploy=auto_deploy_flag,
             owner_id=session_id,
         )
         first_package_name = str(package_sources[0].get("package_file_name") or "")
@@ -781,7 +750,6 @@ def create_app() -> FastAPI:
                 "package_file_name": first_package_name,
                 "package_file_names": [str(item.get("package_file_name") or "") for item in package_sources],
                 "package_count": len(package_sources),
-                "auto_deploy": auto_deploy_flag,
                 "package_prefix": first_package_name.split("_", 1)[0].strip() if first_package_name else "",
                 "remote_path": client.resolve_remote_path(posixpath.join(selected_module_path, first_package_name)) if first_package_name else selected_module_path,
                 "remote_paths": [

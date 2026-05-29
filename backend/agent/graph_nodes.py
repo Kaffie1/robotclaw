@@ -18,8 +18,7 @@ from ..playbooks import build_fault_doc_context_from_playbook, list_playbooks, r
 from ..playbooks.loader import find_playbook_by_id
 from ..tools import tool_registry
 from .playbook_state import build_matched_playbook_payload, publish_live_playbook_state
-from .model_factory import build_chat_model, load_chat_message_classes
-from .model_factory import build_router_model
+from .model_factory import build_chat_model, build_router_model, invoke_chat_model, load_chat_message_classes
 from .thread_context import hydrate_runtime_tool_context, sanitize_tool_context
 from ..playbooks.loader import get_playbook_catalog
 from .prompt_builder import build_fault_chat_system_prompt, build_fault_route_prompt, build_playbook_summary_prompt
@@ -124,7 +123,7 @@ def resolve_playbook_route(state: FaultRouteState, *, publish: bool = True) -> F
             "prompt": prompt,
         },
     )
-    response = llm.invoke(prompt)
+    response = invoke_chat_model(llm, prompt, model=OPENAI_CHAT_MODEL)
     raw_content = getattr(response, "content", "")
     logger.info("LLM 路由模型返回 | model=%s", OPENAI_CHAT_MODEL)
     append_fault_trace(
@@ -686,7 +685,7 @@ def call_chat_model_node(state: FaultChatState) -> FaultChatState:
         },
     )
     llm = build_chat_model()
-    response = llm.invoke(messages)
+    response = invoke_chat_model(llm, messages, model=OPENAI_CHAT_MODEL)
     logger.info("LLM 聊天模型返回 | model=%s", OPENAI_CHAT_MODEL)
     append_fault_trace(
         "chat_model_output",

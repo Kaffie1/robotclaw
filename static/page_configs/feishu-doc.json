@@ -38,5 +38,10 @@
     "title": "地图管理接口文档",
     "comment": "查看地图管理的所有ros接口，包含了接口的输入输出参数、使用方法等内容。",
     "url": "https://c1jw7i5fp7q.feishu.cn/docx/GQ5sdYTBWovuQkxp6ERcXIzTnce"
+  },
+  {
+    "title": "激光建图接口文档",
+    "comment": "查看激光建图的所有ros接口，包含了接口的输入输出参数、使用方法等内容。",
+    "url": "https://c1jw7i5fp7q.feishu.cn/wiki/ZJJQw6KorizhEdkTOjncJMSdnUg"
   }
 ]

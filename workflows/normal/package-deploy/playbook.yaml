@@ -14,7 +14,6 @@ playbooks:
       # 安装包来源与任务级输入
       source_metadata: { type: object, source: input }
       upload_token: { type: string, source: input }
-      cleanup_existing_remote_files: { type: boolean, source: input }
 
       # 目标设备与部署目标
       device_type: { type: string, source: input }
@@ -79,8 +78,6 @@ playbooks:
                   from_context: local_tmp_path
                 file_size:
                   from_context: file_size
-            cleanup_existing_remote_files:
-              from_context: cleanup_existing_remote_files
             upload_token:
               from_context: upload_token
           assert_ref: rule_2

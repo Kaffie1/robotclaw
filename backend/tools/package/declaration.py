@@ -23,8 +23,6 @@ class RemoteStageArtifactsArgs(DeviceTypeArgs):
     target_root: str
     target_mode: str = "directory"
     artifact_items: list[dict[str, Any]] = Field(default_factory=list)
-    cleanup_existing_remote_files: bool = True
-    auto_deploy: bool = False
     upload_token: str = ""
 
 
@@ -74,8 +72,6 @@ def handle_remote_stage_artifacts(args: RemoteStageArtifactsArgs, tool_context: 
                 target_root=args.target_root,
                 target_mode=str(args.target_mode or ""),
                 artifact_items=artifact_items,
-                cleanup_existing_remote_files=bool(args.cleanup_existing_remote_files),
-                auto_deploy=bool(args.auto_deploy),
                 upload_token=upload_token,
                 sudo_password=current_robot_password(runtime.session),
             )

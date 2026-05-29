@@ -25,7 +25,7 @@ let livePlaybookEventQueue = [];
 let livePlaybookPlaybackTimer = null;
 let livePlaybookEventSource = null;
 let livePlaybookReconnectTimer = null;
-let playbookPanelCollapsed = false;
+let playbookPanelCollapsed = true;
 
 function nextPaint() {
   return new Promise((resolve) => {
@@ -55,7 +55,16 @@ function renderChatMessages() {
 
     const body = document.createElement("div");
     body.className = "chat-message-body";
-    body.textContent = message.content || "";
+    if (message.pending && message.role === "assistant") {
+      body.classList.add("chat-message-body-pending");
+      const pendingDetail = String(message.content || "").trim();
+      const detailMarkup = pendingDetail && pendingDetail !== "思考中"
+        ? `<span class="chat-thinking-detail">${escapeHtml(pendingDetail)}</span>`
+        : "";
+      body.innerHTML = `<span class="chat-thinking-main"><span class="chat-thinking-label">思考中</span><span class="chat-thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span></span>${detailMarkup}`;
+    } else {
+      body.textContent = message.content || "";
+    }
 
     item.append(badge, body);
     chatMessageList.appendChild(item);
@@ -64,15 +73,102 @@ function renderChatMessages() {
   chatMessageList.scrollTop = chatMessageList.scrollHeight;
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function setChatPending(pending) {
   chatState.pending = Boolean(pending);
   if (chatSubmitBtn) {
     chatSubmitBtn.disabled = chatState.pending;
-    chatSubmitBtn.textContent = chatState.pending ? "发送中..." : "发送";
+    chatSubmitBtn.textContent = chatState.pending ? "思考中..." : "发送";
   }
   if (chatInput) {
     chatInput.disabled = chatState.pending;
   }
+}
+
+function setPendingAssistantMessage(content = "思考中") {
+  const lastMessage = chatState.messages[chatState.messages.length - 1];
+  if (lastMessage?.pending && lastMessage.role === "assistant") {
+    lastMessage.content = String(content || "思考中").trim() || "思考中";
+    renderChatMessages();
+    return;
+  }
+  chatState.messages.push({
+    role: "assistant",
+    content: String(content || "思考中").trim() || "思考中",
+    pending: true,
+  });
+  renderChatMessages();
+}
+
+function updatePendingAssistantMessage(content = "思考中") {
+  const lastMessage = chatState.messages[chatState.messages.length - 1];
+  if (!(lastMessage?.pending && lastMessage.role === "assistant")) return;
+  const nextContent = String(content || "思考中").trim() || "思考中";
+  if (lastMessage.content === nextContent) return;
+  lastMessage.content = nextContent;
+  renderChatMessages();
+}
+
+function resolvePendingAssistantMessage(content) {
+  const normalizedContent = String(content || "").trim();
+  const lastMessage = chatState.messages[chatState.messages.length - 1];
+  if (lastMessage?.pending && lastMessage.role === "assistant") {
+    lastMessage.pending = false;
+    lastMessage.content = normalizedContent;
+  } else {
+    chatState.messages.push({
+      role: "assistant",
+      content: normalizedContent,
+    });
+  }
+}
+
+function failPendingAssistantMessage(errorMessage) {
+  const message = `调用失败：${String(errorMessage || "").trim()}`;
+  const lastMessage = chatState.messages[chatState.messages.length - 1];
+  if (lastMessage?.pending && lastMessage.role === "assistant") {
+    lastMessage.pending = false;
+    lastMessage.content = message;
+  } else {
+    chatState.messages.push({
+      role: "assistant",
+      content: message,
+    });
+  }
+}
+
+function derivePendingAssistantText(data = {}) {
+  const continuation = data?.continuation && typeof data.continuation === "object" ? data.continuation : null;
+  if (continuation) {
+    const continuationMessage = String(continuation.message || "").trim();
+    if (continuationMessage) return continuationMessage;
+  }
+
+  const execution = data?.playbook_execution && typeof data.playbook_execution === "object"
+    ? data.playbook_execution
+    : null;
+  if (execution) {
+    const activeNodePath = String(execution.active_node_path || "").trim();
+    const nodeStatuses = execution.node_statuses && typeof execution.node_statuses === "object"
+      ? execution.node_statuses
+      : {};
+    const activeNode = activeNodePath ? nodeStatuses[activeNodePath] : null;
+    const activeNodeMessage = String(activeNode?.message || "").trim();
+    if (activeNodeMessage) return activeNodeMessage;
+
+    const overallStatus = String(execution.overall_status || "").trim().toLowerCase();
+    if (overallStatus === "success" || overallStatus === "failed") return "正在整理结论";
+  }
+
+  return "思考中";
 }
 
 function setChatClarifyState(clarify = null) {
@@ -539,6 +635,9 @@ function setPlaybookZoom(nextZoom) {
 }
 
 function maybeShowPlaybookFromResponse(data) {
+  if (chatState.pending) {
+    updatePendingAssistantMessage(derivePendingAssistantText(data || {}));
+  }
   const hasExecutionField = Object.prototype.hasOwnProperty.call(data || {}, "playbook_execution");
   const nextExecution = data.playbook_execution && typeof data.playbook_execution === "object"
     ? data.playbook_execution
@@ -658,6 +757,7 @@ async function submitChatMessage(event) {
   const historyBeforeSubmit = getRecentConversationHistory();
   chatState.messages.push({ role: "user", content });
   renderChatMessages();
+  setPendingAssistantMessage("思考中");
   if (chatInput) chatInput.value = "";
   setChatPending(true);
   startLivePlaybookStreaming();
@@ -706,10 +806,7 @@ async function submitChatMessage(event) {
       });
     }
 
-    chatState.messages.push({
-      role: "assistant",
-      content: String(data.message || "").trim(),
-    });
+    resolvePendingAssistantMessage(data.message);
     chatState.continuation = data.continuation && typeof data.continuation === "object"
       ? data.continuation
       : null;
@@ -718,10 +815,7 @@ async function submitChatMessage(event) {
     renderChatMessages();
     appendLog("聊天助手回复完成", data.model || "");
   } catch (error) {
-    chatState.messages.push({
-      role: "assistant",
-      content: `调用失败：${error.message}`,
-    });
+    failPendingAssistantMessage(error.message);
     renderChatMessages();
     throw error;
   } finally {

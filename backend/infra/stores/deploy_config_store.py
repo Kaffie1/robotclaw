@@ -28,17 +28,9 @@ def normalize_doc_link(entry: Any) -> dict[str, str] | None:
 
 def normalize_deploy_profile(profile: Any, defaults: dict[str, Any]) -> dict[str, Any]:
     item = profile if isinstance(profile, dict) else {}
-    probe_command_template = str(item.get("probe_command_template") or defaults.get("probe_command_template", "")).strip()
-    install_template = str(item.get("install_template") or defaults["install_template"]).strip()
-    if not install_template:
-        install_template = defaults["install_template"]
+    default_rollback_template = str(defaults.get("rollback_template", "")).strip()
     normalized = {
-        "probe_command_template": probe_command_template,
-        "install_template": install_template,
-        "start_command": str(item.get("start_command", defaults["start_command"])).strip(),
-        "health_command": str(item.get("health_command", defaults["health_command"])).strip(),
-        "rollback_template": str(item.get("rollback_template", defaults["rollback_template"])).strip(),
-        "auto_rollback": bool(item.get("auto_rollback", defaults["auto_rollback"])),
+        "rollback_template": str(item.get("rollback_template", default_rollback_template)).strip(),
     }
     raw_machine_options = item.get("machine_options", defaults.get("machine_options", []))
     machine_options: list[dict[str, str]] = []
@@ -58,13 +50,7 @@ def normalize_deploy_profile(profile: Any, defaults: dict[str, Any]) -> dict[str
             if not normalized_key:
                 continue
             machine_profiles[normalized_key] = {
-                "probe_command_template": str(machine_item.get("probe_command_template", normalized["probe_command_template"])).strip(),
-                "install_template": str(machine_item.get("install_template", normalized["install_template"])).strip()
-                or normalized["install_template"],
-                "start_command": str(machine_item.get("start_command", normalized["start_command"])).strip(),
-                "health_command": str(machine_item.get("health_command", normalized["health_command"])).strip(),
-                "rollback_template": str(machine_item.get("rollback_template", normalized["rollback_template"])).strip(),
-                "auto_rollback": bool(machine_item.get("auto_rollback", normalized["auto_rollback"])),
+                "rollback_template": str(machine_item.get("rollback_template", normalized.get("rollback_template", ""))).strip(),
             }
     if machine_profiles:
         normalized["machine_profiles"] = machine_profiles

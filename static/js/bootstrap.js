@@ -6,7 +6,6 @@ window.addEventListener("load", async () => {
     switchPage(initialPage);
     switchGuidePage("flow");
     await loadFeishuDocs();
-    await loadAutoDeployConfigs();
     initializeTimeSelectors();
     initializeModuleFilters();
     const data = await request("/api/status");

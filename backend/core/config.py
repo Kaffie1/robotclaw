@@ -34,16 +34,17 @@ def normalize_app_edition(value: str) -> str:
         return "robot"
     return "server"
 
-APP_HOST = str(os.getenv("APP_HOST") or "0.0.0.0").strip() or "127.0.0.1"
-APP_PORT = int(str(os.getenv("APP_PORT") or "8000").strip() or "8000")
-APP_EDITION = normalize_app_edition(os.getenv("APP_EDITION") or "server")
-IS_ROBOT_EDITION = APP_EDITION == "robot"
 OPENAI_API_KEY = str(os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = str(os.getenv("OPENAI_BASE_URL") or "").strip()
 OPENAI_CHAT_MODEL = str(os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini").strip() or "gpt-4.1-mini"
 OPENAI_CHAT_TEMPERATURE = float(str(os.getenv("OPENAI_CHAT_TEMPERATURE") or "0.2").strip() or "0.2")
 OPENAI_ENABLE_REASONING_SPLIT = str(os.getenv("OPENAI_ENABLE_REASONING_SPLIT") or "").strip().lower() in {"1", "true", "yes", "on"}
 OPENAI_THINK = str(os.getenv("OPENAI_THINK") or "").strip()
+
+APP_HOST = "0.0.0.0"
+APP_PORT = 8005
+APP_EDITION = normalize_app_edition("server")
+IS_ROBOT_EDITION = APP_EDITION == "robot"
 
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATE_DIR = BASE_DIR / "templates"
@@ -62,6 +63,7 @@ CONNECTION_CACHE_PATH = DATA_DIR / "connection_cache.json"
 DEPLOY_CONFIG_PATH = STATIC_DIR / "page_configs" / "deploy.json"
 TRACE_LOG_PATH = RUNTIME_DIR / "runtime_trace.log"
 FAULT_TRACE_LOG_PATH = TRACE_LOG_PATH
+RUNTIME_TRACE_ENABLED = False
 SESSION_COOKIE = "robot_upgrade_sid"
 MAX_CONNECTION_CACHE_ITEMS = 8
 MAX_TASK_ITEMS = 5
@@ -87,22 +89,9 @@ CHFS_PORT = 10000
 CHFS_USER = "admin"
 CHFS_PASSWORD = "admin"
 UPLOAD_CHUNK_SIZE = 1024 * 1024
-DEFAULT_DEPLOY_CONFIG = {
+DEFAULT_DEPLOY_PAGE_CONFIG = {
     "package": {
-        "probe_command_template": "chmod +x {deb_path} && {deb_path} --quiet -- support_robot_types",
-        "install_template": "chmod +x {deb_path} && {deb_path} -- --device_type={device_type} --force --robot_type={machine_type} --user={target_username} --password={target_password}",
-        "start_command": "",
-        "health_command": (
-            "test -s ~/.zj_humanoid/version.json && ("
-            "(command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet zj_humanoid) || "
-            "(command -v sudo >/dev/null 2>&1 && sudo -n systemctl is-active --quiet zj_humanoid) || "
-            "test -L ~/navi_project || "
-            "test -L ~/zj_humanoid || "
-            "(command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q .)"
-            ")"
-        ),
         "rollback_template": "",
-        "auto_rollback": False,
         "machine_options": [
             {"value": "H1",         "label": "H1",},
             {"value": "U1",         "label": "U1",},
@@ -119,26 +108,6 @@ DEFAULT_DEPLOY_CONFIG = {
         ],
     },
     "module": {
-        "probe_command_template": "",
-        "install_template": (
-            'bash -ic "export COMPOSE_PROFILES={compose_profiles}; '
-            'export DISPLAY=\\${DISPLAY:-127.0.0.1:99.0}; '
-            'export ROBOT_MODEL=\\$COMPOSE_PROFILES; '
-            'if [ \\"\\$COMPOSE_PROFILES\\" = \\"rx\\" ]; then '
-            'export ROS_MASTER_URI=http://192.168.217.100:11311; '
-            'else export ROS_MASTER_URI=http://192.168.217.1:11311; fi; '
-            'export ROS_IP=192.168.217.100; '
-            'echo ROS_MASTER_URI=\\$ROS_MASTER_URI; '
-            'echo ROS_IP=\\$ROS_IP; '
-            'echo COMPOSE_PROFILES=\\$COMPOSE_PROFILES; '
-            f"cd {MODULE_DEPLOY_PROJECT_ROOT} && "
-            'docker compose down {module_name} && '
-            'docker compose up -d {module_name}"'
-        ),
-        "start_command": "",
-        "health_command": "",
-        "rollback_template": "",
-        "auto_rollback": False,
         "machine_options": [
             {
                 "value": module_name,
