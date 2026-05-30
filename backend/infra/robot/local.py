@@ -9,7 +9,7 @@ from typing import Any
 
 from ...core.config import PROJECT_ROOT_CANDIDATES, UPLOAD_CHUNK_SIZE
 from ...core.models import ApiError, ConnectionConfig
-from ...shared.remote import build_backup_path, short_error
+from ...core.remote import build_backup_path, short_error
 from .base import RobotClient
 from .ssh import IGNORED_REMOTE_ENTRY_NAMES
 

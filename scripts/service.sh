@@ -37,7 +37,7 @@ can_import_backend() {
   local py="$1"
   (
     cd "$BASE_DIR"
-    PYTHONPATH="$BASE_DIR:${PYTHONPATH:-}" "$py" -c "import backend.web.main"
+    PYTHONPATH="$BASE_DIR:${PYTHONPATH:-}" "$py" -c "import backend.gateway.main"
   ) >/dev/null 2>&1
 }
 
@@ -96,7 +96,7 @@ if ! PYTHON_BIN="$(resolve_python_bin)"; then
   exit 1
 fi
 
-START_CMD=("$PYTHON_BIN" -m backend.web.main)
+START_CMD=("$PYTHON_BIN" -m backend.gateway.main)
 
 port_in_use() {
   "$PYTHON_BIN" - "$APP_HOST" "$APP_PORT" <<'PY'
@@ -143,7 +143,7 @@ check_runtime() {
   fi
 
   if ! can_import_backend "$PYTHON_BIN"; then
-    echo "当前 Python 环境无法导入 backend.web.main: $PYTHON_BIN" >&2
+    echo "当前 Python 环境无法导入 backend.gateway.main: $PYTHON_BIN" >&2
     echo "项目目录: $BASE_DIR" >&2
     echo "可先安装依赖，或通过 PYTHON_BIN 指定可用环境，例如:" >&2
     echo "  PYTHON_BIN=/path/to/python ./scripts/service.sh start" >&2

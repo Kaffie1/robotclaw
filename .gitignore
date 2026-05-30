@@ -5,6 +5,5 @@ __pycache__/
 # .codex/
 .env
 
-data/
 !data/.gitkeep
 doc/

@@ -11,7 +11,7 @@ from typing import Any
 import paramiko
 
 from ...core.config import PROJECT_ROOT_CANDIDATES, UPLOAD_CHUNK_SIZE
-from ...shared.remote import build_backup_path, is_dir, iter_command_output_lines, short_error
+from ...core.remote import build_backup_path, is_dir, iter_command_output_lines, short_error
 from ...core.models import ApiError, ConnectionConfig
 from .base import RobotClient
 
