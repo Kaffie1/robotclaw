@@ -13,6 +13,18 @@ from .nodes.route import (
 from .state import FaultChatState
 
 
+def route_after_route_playbook_node(state: FaultChatState) -> str:
+    if str(state.get("selected_playbook_id") or "").strip():
+        return "wait_playbook_render"
+    return "build_messages"
+
+
+def route_after_build_messages_node(state: FaultChatState) -> str:
+    if str(state.get("selected_playbook_id") or "").strip():
+        return "execute_playbook"
+    return "retrieve_knowledge"
+
+
 def route_after_playbook_node(state: FaultChatState) -> str:
     if isinstance(state.get("pending_confirmation"), dict):
         return "finish"
@@ -32,6 +44,8 @@ def route_after_interpret_node(state: FaultChatState) -> str:
 
 __all__ = [
     "resolve_playbook_route",
+    "route_after_build_messages_node",
+    "route_after_route_playbook_node",
     "route_after_interpret_node",
     "route_after_playbook_node",
     "route_playbook_node",

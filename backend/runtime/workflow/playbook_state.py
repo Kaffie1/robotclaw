@@ -180,10 +180,10 @@ def build_matched_playbook_payload(playbook: dict[str, Any] | None) -> dict[str,
     }
 
 
-def build_matched_playbook_payload_by_id(playbook_id: str) -> dict[str, Any] | None:
+def build_matched_playbook_payload_by_id(playbook_id: str, workflow_type: str | None = None) -> dict[str, Any] | None:
     if not playbook_id:
         return None
-    return build_matched_playbook_payload(find_playbook_by_id(playbook_id))
+    return build_matched_playbook_payload(find_playbook_by_id(playbook_id, workflow_type=workflow_type))
 
 
 def build_playbook_execution_payload(

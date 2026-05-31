@@ -41,7 +41,7 @@ function renderChatMessages() {
   if (!chatState.messages.length) {
     const empty = document.createElement("div");
     empty.className = "chat-empty-state";
-    empty.innerHTML = "<strong>开始对话</strong><p>你可以先描述一个故障现象，或者直接问机器人相关问题。</p>";
+    empty.innerHTML = "<strong>开始对话</strong><p>你可以先描述一个行为，或者直接问机器人相关问题。</p>";
     chatMessageList.appendChild(empty);
     return;
   }

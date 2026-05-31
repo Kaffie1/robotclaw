@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ...agent import run_fault_chat_graph
+from ...agent.shared.thread_context import clear_runtime_tool_contexts_for_session
 from ...agent.graph.nodes.classify import load_catalog_node
 from ...agent.graph.nodes.route import resolve_playbook_route
 from ...runtime.workflow.playbook_state import (
@@ -20,7 +21,12 @@ from ...core.models import ToolCallPayload
 from ...core.shared import logger
 from ...infra.container import task_manager
 from ...runtime.tools import tool_registry
-from ...runtime.workflow.confirmation import append_chat_history_turn, get_chat_history, reset_chat_state
+from ...runtime.workflow.confirmation import (
+    append_chat_history_turn,
+    append_collected_question,
+    get_chat_history,
+    reset_chat_state,
+)
 from ..support import get_session, get_session_id, summarize_playbook_execution
 
 router = APIRouter()
@@ -51,8 +57,12 @@ async def api_chat(request: Request):
     else:
         user_message = message
         tool_context = {"session_id": session_id}
+        append_collected_question(user_message)
     last_config = session.get("last_config") or {}
-    route_selection_payload = build_matched_playbook_payload_by_id(str((route_selection or {}).get("playbook_id") or "").strip())
+    route_selection_payload = build_matched_playbook_payload_by_id(
+        str((route_selection or {}).get("playbook_id") or "").strip(),
+        workflow_type=str((route_selection or {}).get("playbook_type") or "").strip() or None,
+    )
     continuation_kind = str((continuation or {}).get("kind") or "").strip() if isinstance(continuation, dict) else ""
     if isinstance(continuation, dict):
         raw_resume_state = continuation.get("resume_state")
@@ -93,6 +103,7 @@ async def api_chat(request: Request):
         confirmation_response=message if continuation_kind == "playbook_confirmation" else "",
         prefetched_playbook_id=str((route_selection or {}).get("playbook_id") or "").strip(),
         prefetched_playbook_title=str((route_selection or {}).get("playbook_title") or "").strip(),
+        prefetched_playbook_type=str((route_selection or {}).get("playbook_type") or "").strip(),
         prefetched_reason=str((route_selection or {}).get("reason") or "").strip(),
     )
     append_chat_history_turn(
@@ -113,6 +124,7 @@ def api_chat_reset(request: Request):
     session_id = get_session_id(request)
     reset_chat_state({"session_id": session_id})
     clear_live_playbook_state(session_id=session_id)
+    clear_runtime_tool_contexts_for_session(session_id)
     return {"ok": True, "message": "聊天上下文已清空"}
 
 
@@ -140,13 +152,15 @@ async def api_chat_route(request: Request):
     route_result = await asyncio.to_thread(resolve_playbook_route, route_state, publish=True)
     playbook_id = str(route_result.get("selected_playbook_id") or "").strip()
     playbook_title = str(route_result.get("selected_playbook_title") or "").strip()
+    playbook_type = str(route_result.get("selected_playbook_type") or "").strip()
     reason = str(route_result.get("reason") or "").strip()
-    playbook_payload = build_matched_playbook_payload_by_id(playbook_id)
+    playbook_payload = build_matched_playbook_payload_by_id(playbook_id, workflow_type=playbook_type or None)
     return {
         "ok": True,
         "route_selection": {
             "playbook_id": playbook_id,
             "playbook_title": playbook_title,
+            "playbook_type": playbook_type,
             "reason": reason,
         },
         "playbook": playbook_payload,

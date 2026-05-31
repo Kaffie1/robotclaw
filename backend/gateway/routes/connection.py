@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 
 from ...core.config import APP_EDITION
 from ...core.models import ApiError, ConnectPayload, ConnectionConfig
+from ...agent.shared.thread_context import clear_runtime_tool_contexts_for_session
 from ...runtime.operations.services import refresh_remote_shortcuts
 from ...core.validation import require_text
 from ...infra.container import connection_cache_store, deploy_config_store
@@ -92,13 +93,15 @@ def api_connect(payload: ConnectPayload, request: Request):
 @router.post("/api/disconnect")
 def api_disconnect(request: Request):
     session = get_session(request)
+    session_id = get_session_id(request)
     session["client"].close()
     session["remote_shortcuts"] = []
     session["preferred_root"] = "/"
-    tool_context = {"session_id": get_session_id(request)}
+    tool_context = {"session_id": session_id}
     reset_chat_state(tool_context)
     delete_chat_history_file(tool_context)
-    clear_live_playbook_state(session_id=get_session_id(request))
+    clear_live_playbook_state(session_id=session_id)
+    clear_runtime_tool_contexts_for_session(session_id)
     session["ssh_auth"] = {"username": str(session["last_config"].get("username") or ""), "password": ""}
     session["processor_auth"] = {
         "ORIN": {

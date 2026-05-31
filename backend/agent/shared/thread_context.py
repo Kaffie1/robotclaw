@@ -60,3 +60,20 @@ def clear_runtime_tool_context(thread_id: str) -> None:
         return
     with _lock:
         _thread_tool_contexts.pop(normalized_thread_id, None)
+
+
+def clear_runtime_tool_contexts_for_session(session_id: str) -> int:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return 0
+    removed_count = 0
+    with _lock:
+        stale_thread_ids = [
+            thread_id
+            for thread_id, tool_context in _thread_tool_contexts.items()
+            if str((tool_context or {}).get("session_id") or "").strip() == normalized_session_id
+        ]
+        for thread_id in stale_thread_ids:
+            _thread_tool_contexts.pop(thread_id, None)
+            removed_count += 1
+    return removed_count

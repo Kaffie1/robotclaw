@@ -17,6 +17,7 @@ from ...prompts.answer import build_playbook_summary_prompt
 from ...shared.model_factory import load_chat_message_classes
 from ...shared.thread_context import hydrate_runtime_tool_context, sanitize_tool_context
 from ..state import FaultChatState
+from ..timing import log_stage_duration, start_stage_timer
 from .answer import _find_selected_playbook
 
 
@@ -27,6 +28,56 @@ def _build_tool_feedback_message(tool_name: str, tool_args: dict[str, Any], tool
         f"参数: {json.dumps(tool_args, ensure_ascii=False)}\n"
         f"结果: {json.dumps(tool_result, ensure_ascii=False)}"
     )
+
+
+def _looks_internal_error_detail(text: str) -> bool:
+    normalized = normalize_message_content(text).lower()
+    if not normalized:
+        return False
+    internal_markers = (
+        "validation error",
+        "input should",
+        "nonetype",
+        "type=",
+        "upload_token",
+        "source_metadata",
+        "remote_deb_path",
+        "from_context",
+        "prepare_artifact_sources",
+        "prepare_package_source",
+    )
+    return any(marker in normalized for marker in internal_markers)
+
+
+def _sanitize_user_facing_detail(text: str, *, fallback: str = "") -> str:
+    normalized = normalize_message_content(text)
+    if not normalized:
+        return normalize_message_content(fallback)
+    if _looks_internal_error_detail(normalized):
+        return normalize_message_content(fallback)
+    return normalized
+
+
+def _build_user_facing_step_label(step: dict[str, Any], index: int) -> str:
+    display_name = normalize_message_content(step.get("display_name") or "")
+    if display_name:
+        return display_name
+    return f"步骤{index}"
+
+
+def _build_failed_step_summary(steps: list[dict[str, Any]], playbook_title: str) -> str:
+    for index, step in enumerate(steps, start=1):
+        if bool(step.get("passed")):
+            continue
+        step_label = _build_user_facing_step_label(step, index)
+        friendly_failure = _sanitize_user_facing_detail(
+            step.get("failure_message") or "",
+            fallback=f"{playbook_title}在“{step_label}”阶段失败，请检查前置条件或执行环境后重试。",
+        )
+        if friendly_failure:
+            return friendly_failure
+        return f"{playbook_title}在“{step_label}”阶段失败，请检查前置条件或执行环境后重试。"
+    return ""
 
 
 def _extend_tool_traces_from_script(tool_traces: list[dict[str, Any]], scripted_playbook: dict[str, Any]) -> None:
@@ -59,14 +110,18 @@ def _build_playbook_final_message(state: FaultChatState, scripted_playbook: dict
     conclusion = normalize_message_content(scripted_playbook.get("conclusion", ""))
     next_action = normalize_message_content(scripted_playbook.get("next_action", ""))
     steps = [step for step in (scripted_playbook.get("steps") or []) if isinstance(step, dict)]
+    failed_step_summary = _build_failed_step_summary(steps, playbook_title)
 
     process_lines: list[str] = []
     for index, step in enumerate(steps, start=1):
-        name = normalize_message_content(
-            step.get("display_name") or step.get("name") or step.get("tool_name") or f"步骤{index}"
-        )
+        name = _build_user_facing_step_label(step, index)
         outcome = "成功" if bool(step.get("passed")) else "失败"
-        detail = normalize_message_content(step.get("output") or step.get("failure_message") or "")
+        detail = ""
+        if not bool(step.get("passed")):
+            detail = _sanitize_user_facing_detail(
+                step.get("failure_message") or step.get("output") or "",
+                fallback=f"{name}未能完成，请检查前置条件或补齐必要输入后重试。",
+            )
         line = f"{index}. {name}：{outcome}"
         if detail:
             line += f"；{detail}"
@@ -76,8 +131,10 @@ def _build_playbook_final_message(state: FaultChatState, scripted_playbook: dict
         process_lines.append("1. 已执行脚本化排查流程，未记录到可展示的步骤明细。")
 
     problem = user_message or f"{playbook_title}相关问题"
+    conclusion = _sanitize_user_facing_detail(conclusion, fallback=failed_step_summary or "流程已执行完成，但未生成明确结论。")
     if not conclusion:
         conclusion = "流程已执行完成，但未生成明确结论。"
+    next_action = _sanitize_user_facing_detail(next_action, fallback="")
     if next_action and next_action != conclusion:
         conclusion = f"{conclusion}\n建议下一步：{next_action}"
 
@@ -97,8 +154,11 @@ def _build_playbook_summary_request(state: FaultChatState, scripted_playbook: di
 
 
 def execute_playbook_node(state: FaultChatState) -> FaultChatState:
+    started_at = start_stage_timer()
     selected_playbook_id = normalize_message_content(state.get("selected_playbook_id", ""))
+    selected_playbook_type = normalize_message_content(state.get("selected_playbook_type", "")).lower()
     if not selected_playbook_id:
+        log_stage_duration("execute_playbook", started_at, playbook_id="", skipped=True)
         return {
             "scripted_playbook": None,
             "pending_confirmation": None,
@@ -106,7 +166,7 @@ def execute_playbook_node(state: FaultChatState) -> FaultChatState:
         }
     thread_id = normalize_message_content(state.get("thread_id", ""))
     session_id = normalize_message_content(state.get("session_id", ""))
-    selected_playbook = _find_selected_playbook(selected_playbook_id)
+    selected_playbook = _find_selected_playbook(selected_playbook_id, selected_playbook_type)
     matched_playbook_payload = build_matched_playbook_payload(selected_playbook)
     resume_continuation = state.get("resume_continuation")
     continuation_kind = normalize_message_content((resume_continuation or {}).get("kind", "")) if isinstance(resume_continuation, dict) else ""
@@ -134,7 +194,7 @@ def execute_playbook_node(state: FaultChatState) -> FaultChatState:
     scripted_playbook = run_scripted_playbook_by_id(
         selected_playbook_id,
         effective_tool_context,
-        workflow_type="fault",
+        workflow_type=selected_playbook_type or None,
         resume_state=resume_state,
         status_reporter=lambda payload: publish_live_playbook_state(
             session_id=session_id,
@@ -146,6 +206,7 @@ def execute_playbook_node(state: FaultChatState) -> FaultChatState:
         ),
     )
     if not scripted_playbook:
+        log_stage_duration("execute_playbook", started_at, playbook_id=selected_playbook_id, executed=False)
         return {
             "scripted_playbook": None,
             "pending_confirmation": None,
@@ -165,6 +226,7 @@ def execute_playbook_node(state: FaultChatState) -> FaultChatState:
             active_node_message=normalize_message_content(pending_confirmation.get("message", "")),
         )
         append_fault_trace("playbook_confirmation", pending_confirmation)
+        log_stage_duration("execute_playbook", started_at, playbook_id=selected_playbook_id, pending_confirmation=True)
         return {
             "scripted_playbook": scripted_playbook,
             "tool_traces": tool_traces,
@@ -182,6 +244,13 @@ def execute_playbook_node(state: FaultChatState) -> FaultChatState:
         playbook=matched_playbook_payload,
         scripted_playbook=scripted_playbook,
     )
+    log_stage_duration(
+        "execute_playbook",
+        started_at,
+        playbook_id=selected_playbook_id,
+        executed=bool(scripted_playbook.get("executed")),
+        step_count=len(scripted_playbook.get("steps") or []),
+    )
     return {
         "scripted_playbook": scripted_playbook,
         "tool_traces": tool_traces,
@@ -196,12 +265,14 @@ def execute_playbook_node(state: FaultChatState) -> FaultChatState:
 
 
 def call_tools_node(state: FaultChatState) -> FaultChatState:
+    started_at = start_stage_timer()
     thread_id = normalize_message_content(state.get("thread_id", ""))
     messages = list(state.get("messages") or [])
     tool_traces = list(state.get("tool_traces") or [])
     effective_tool_context = hydrate_runtime_tool_context(thread_id, state.get("effective_tool_context"))
     _, HumanMessage, _ = load_chat_message_classes()
     for command in state.get("pending_commands") or []:
+        command_started_at = start_stage_timer()
         tool_name = str(command.get("name") or command.get("tool_name") or "").strip()
         if not tool_name:
             raise ApiError("模型输出的命令缺少工具名")
@@ -232,6 +303,13 @@ def call_tools_node(state: FaultChatState) -> FaultChatState:
             },
         )
         messages.append(HumanMessage(content=_build_tool_feedback_message(tool_name, tool_args, tool_result)))
+        log_stage_duration(
+            "call_tool",
+            command_started_at,
+            tool_name=tool_name,
+            ok=bool(tool_result.get("ok", True)) if isinstance(tool_result, dict) else True,
+        )
+    log_stage_duration("call_tools", started_at, command_count=len(state.get("pending_commands") or []))
     return {
         "messages": messages,
         "tool_traces": tool_traces,

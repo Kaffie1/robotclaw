@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
+from ....core.config import TOP_K
 from ..vectorstore import load_vectorstore, search_vectorstore
 from .common import build_chunk_key
 
 
 def retrieve_vector_documents(
     query: str,
-    kb_name: str,
-    top_k: int = 5,
+    top_k: int = TOP_K,
     exclude_chunk_keys: set[str] | None = None,
     docs: list[Document] | None = None,
     query_bundle=None,
@@ -20,7 +20,7 @@ def retrieve_vector_documents(
     del query_bundle
 
     exclude_chunk_keys = exclude_chunk_keys or set()
-    handle = load_vectorstore(kb_name)
+    handle = load_vectorstore()
     deduped_docs: list[Document] = []
     seen_chunk_keys: set[str] = set()
     for doc, score in search_vectorstore(handle=handle, query=query, top_k=top_k + len(exclude_chunk_keys)):

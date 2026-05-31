@@ -5,6 +5,14 @@ playbooks:
   - id: package-deploy
     type: normal
     title: 整包部署
+    input_requirements:
+      - "必须提供安装包来源：二选一为本地上传文件，或文件服务器包路径"
+      - "如果来源是本地上传文件，需要同时保留有效的上传会话"
+      - "必须提供目标设备类型"
+      - "如果安装命令依赖目标账号密码，需要同时提供目标凭证"
+    entry_examples:
+      - "帮我部署整包，本地安装包已经上传，目标设备是 ORIN"
+      - "帮我部署整包，文件服务器路径是 /release/1.4.0/install.run，目标设备是 ORIN"
     # context_schema 用来显式声明这个 workflow 会跨节点共享的上下文字段。
     # 约定：
     # - input：流程启动时传入
@@ -12,7 +20,12 @@ playbooks:
     # - confirmation：用户确认后写入
     context_schema:
       # 安装包来源与任务级输入
+      # source_metadata 由前端部署流程整理得到：
+      # - 本地上传时记录上传后的临时文件信息
+      # - 文件服务器模式下记录源路径与下载路径信息
       source_metadata: { type: object, source: input }
+      # upload_token 用于关联上传进度与本地上传临时文件；
+      # 文件服务器模式下可以为空，但本地上传模式必须有效。
       upload_token: { type: string, source: input }
 
       # 目标设备与部署目标
@@ -57,7 +70,7 @@ playbooks:
                   from_context: source_metadata
             upload_token:
               from_context: upload_token
-          failure_message: 安装包来源准备失败，请检查本地上传文件或文件服务器路径
+          failure_message: 安装包来源准备失败。当前需要补充安装包来源信息：请提供本地上传文件，或提供有效的文件服务器包路径；如果使用本地上传，请确认上传会话仍然有效。下次可按这个格式提问：帮我部署整包，本地安装包已经上传，目标设备是 ORIN；或者：帮我部署整包，文件服务器路径是 /release/1.4.0/install.run，目标设备是 ORIN
         - type: action
           name: stage_package_to_remote_target
           display_name: 准备远端安装包
@@ -81,7 +94,7 @@ playbooks:
             upload_token:
               from_context: upload_token
           assert_ref: rule_2
-          failure_message: 远端安装包准备失败，请检查上传状态、远端目录权限或同名旧包清理结果
+          failure_message: 远端安装包准备失败，请检查上传状态、远端目录权限、同名旧包清理结果，或确认当前上传会话未失效
         - type: condition
           name: verify_remote_package_exists
           display_name: 检查安装包是否存在
@@ -198,9 +211,11 @@ playbooks:
     escalation_notes:
       - "整包部署会先在任务内准备安装包来源，再上传到目标处理器执行安装"
       - "如果安装包本身不支持当前选项，先重新确认部署参数或更换安装包"
+      - "如果未提供上传文件或文件服务器路径，流程会在安装包来源准备阶段直接中止"
     execution_notes:
       - "这是第一版部署行为树，目标是先打通整包部署编排链路"
       - "安装前会先通过共享的来源准备节点处理本地上传或文件服务器输入"
+      - "整包部署入口必须先具备安装包来源；仅提供版本号不足以直接启动部署"
       - "安装前会先通过共享的远端上传节点把安装包放到目标路径"
       - "安装前会先修复安装包执行权限"
       - "安装前会先通过通用命令执行节点调用 support_robot_types 探测安装包支持的可选参数"

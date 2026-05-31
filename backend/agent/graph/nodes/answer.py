@@ -14,9 +14,10 @@ from ....core.shared import (
 )
 from ....runtime.playbooks import build_fault_doc_context_from_playbook, list_playbooks
 from ....runtime.tools import tool_registry
-from ...prompts.answer import build_fault_chat_system_prompt
+from ...prompts.answer import build_fault_chat_system_prompt, build_knowledge_answer_system_prompt
 from ...shared.model_factory import build_chat_model, invoke_chat_model, load_chat_message_classes
 from ..state import FaultChatState
+from ..timing import log_stage_duration, start_stage_timer
 
 
 def _coerce_structured_text(value: Any) -> Any:
@@ -50,36 +51,12 @@ def _normalize_final_answer(value: Any) -> dict[str, Any] | None:
             normalized["排查过程："] = raw_value
         elif compact_key in {"结论", "结果", "建议"}:
             normalized["结论："] = raw_value
-    return normalized if all(section in normalized for section in ("问题：", "排查过程：", "结论：")) else None
+    return normalized if "结论：" in normalized else None
 
 
 def _render_polished_final_answer(answer: dict[str, Any]) -> str:
-    problem = normalize_message_content(answer.get("问题：", ""))
     conclusion = normalize_message_content(answer.get("结论：", ""))
-    process = answer.get("排查过程：", "")
-
-    lines: list[str] = ["问题："]
-    if problem:
-        lines.append(f"当前现象：{problem}")
-
-    lines.append("")
-    lines.append("排查过程：")
-    if isinstance(process, list):
-        for index, item in enumerate(process, start=1):
-            item_text = normalize_message_content(item)
-            if item_text:
-                lines.append(f"{index}. {item_text}")
-    else:
-        process_text = normalize_message_content(process)
-        if process_text:
-            lines.append(process_text)
-
-    lines.append("")
-    lines.append("结论：")
-    if conclusion:
-        lines.append(f"综合判断：{conclusion}")
-
-    return "\n".join(lines).strip()
+    return conclusion
 
 
 def _render_final_message(value: Any) -> str:
@@ -119,10 +96,7 @@ def _extract_final_message(payload: dict[str, Any], fallback_text: str) -> str:
 
 def _final_message_has_required_sections(message: str) -> bool:
     text = normalize_message_content(message)
-    if not text:
-        return False
-    normalized_text = text.replace(":", "：")
-    return all(section in normalized_text for section in ("问题：", "排查过程：", "结论："))
+    return bool(text)
 
 
 def _format_message_log(messages: list[Any]) -> str:
@@ -146,6 +120,45 @@ def _format_response_log(response: Any) -> str:
     else:
         lines.append("content: -")
     return "\n".join(lines)
+
+
+def _extract_usage_stats(response: Any) -> dict[str, int]:
+    usage_sources = []
+    usage_metadata = getattr(response, "usage_metadata", None)
+    if isinstance(usage_metadata, dict):
+        usage_sources.append(usage_metadata)
+    response_metadata = getattr(response, "response_metadata", None)
+    if isinstance(response_metadata, dict):
+        token_usage = response_metadata.get("token_usage")
+        if isinstance(token_usage, dict):
+            usage_sources.append(token_usage)
+        usage = response_metadata.get("usage")
+        if isinstance(usage, dict):
+            usage_sources.append(usage)
+
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    for source in usage_sources:
+        prompt_tokens = max(
+            prompt_tokens,
+            int(source.get("input_tokens") or source.get("prompt_tokens") or 0),
+        )
+        completion_tokens = max(
+            completion_tokens,
+            int(source.get("output_tokens") or source.get("completion_tokens") or 0),
+        )
+        total_tokens = max(
+            total_tokens,
+            int(source.get("total_tokens") or 0),
+        )
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
 
 
 def _normalize_command_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -230,29 +243,34 @@ def _append_history_messages(messages: list[Any], history: list[dict[str, str]] 
     return [messages[0], *normalized_history, messages[-1]]
 
 
-def _find_selected_playbook(selected_playbook_id: str) -> dict[str, Any] | None:
-    if not selected_playbook_id:
+def _find_selected_playbook(selected_playbook_id: str, selected_playbook_type: str = "") -> dict[str, Any] | None:
+    normalized_playbook_id = normalize_message_content(selected_playbook_id)
+    normalized_playbook_type = normalize_message_content(selected_playbook_type).lower()
+    if not normalized_playbook_id:
         return None
-    for playbook in list_playbooks(workflow_type="fault"):
-        if str(playbook.get("id") or "").strip() == selected_playbook_id:
+    for playbook in list_playbooks(workflow_type=normalized_playbook_type or None):
+        if normalize_message_content(playbook.get("id", "")) == normalized_playbook_id:
             return playbook
     return None
 
 
 def build_messages_node(state: FaultChatState) -> FaultChatState:
+    started_at = start_stage_timer()
     user_message = normalize_message_content(state.get("user_message", ""))
     selected_playbook_id = normalize_message_content(state.get("selected_playbook_id", ""))
     selected_playbook_title = normalize_message_content(state.get("selected_playbook_title", ""))
+    selected_playbook_type = normalize_message_content(state.get("selected_playbook_type", ""))
     reason = normalize_message_content(state.get("reason", ""))
     route_trace = {
         "playbook_id": selected_playbook_id,
         "playbook_title": selected_playbook_title,
+        "playbook_type": selected_playbook_type,
         "reason": reason,
     }
     logger.info("开始故障路由 | user_message=%s", user_message[:120])
     append_fault_trace("route_start", {"user_message": user_message})
     append_fault_trace("route_finish", route_trace)
-    selected_playbook = _find_selected_playbook(selected_playbook_id)
+    selected_playbook = _find_selected_playbook(selected_playbook_id, selected_playbook_type)
     messages = _build_chat_messages(
         user_message,
         fault_doc_context=build_fault_doc_context_from_playbook(selected_playbook),
@@ -272,10 +290,12 @@ def build_messages_node(state: FaultChatState) -> FaultChatState:
             "playbook_route": route_trace,
         },
     )
+    log_stage_duration("build_messages", started_at, message_count=len(messages), has_playbook=bool(selected_playbook_id))
     return {"messages": messages}
 
 
 def call_chat_model_node(state: FaultChatState) -> FaultChatState:
+    started_at = start_stage_timer()
     messages = list(state.get("messages") or [])
     logger.info("LLM 聊天模型开始调用 | model=%s | message_count=%d", OPENAI_CHAT_MODEL, len(messages))
     append_fault_trace(
@@ -287,13 +307,30 @@ def call_chat_model_node(state: FaultChatState) -> FaultChatState:
     )
     llm = build_chat_model()
     response = invoke_chat_model(llm, messages, model=OPENAI_CHAT_MODEL)
+    usage = _extract_usage_stats(response)
     logger.info("LLM 聊天模型返回 | model=%s", OPENAI_CHAT_MODEL)
+    logger.info(
+        "LLM Token 用量 | model=%s | prompt_tokens=%d | completion_tokens=%d | total_tokens=%d",
+        OPENAI_CHAT_MODEL,
+        usage["prompt_tokens"],
+        usage["completion_tokens"],
+        usage["total_tokens"],
+    )
     append_fault_trace(
         "chat_model_output",
         {
             "model": OPENAI_CHAT_MODEL,
             "response": _format_response_log(response),
+            "usage": usage,
         },
+    )
+    log_stage_duration(
+        "call_chat_model",
+        started_at,
+        message_count=len(messages),
+        prompt_tokens=usage["prompt_tokens"],
+        completion_tokens=usage["completion_tokens"],
+        total_tokens=usage["total_tokens"],
     )
     return {
         "response": response,
@@ -303,9 +340,11 @@ def call_chat_model_node(state: FaultChatState) -> FaultChatState:
 
 
 def interpret_model_output_node(state: FaultChatState) -> FaultChatState:
+    started_at = start_stage_timer()
     content = normalize_message_content(state.get("response_content", ""))
     visible_content = normalize_message_content(strip_think_blocks(content))
     parsed = extract_json_payload(content)
+    response_mode = normalize_message_content(state.get("response_mode", "")).lower()
     append_fault_trace(
         "model_response",
         {
@@ -317,15 +356,41 @@ def interpret_model_output_node(state: FaultChatState) -> FaultChatState:
     messages = list(state.get("messages") or [])
     AIMessage, HumanMessage, _ = load_chat_message_classes()
     if parsed is None:
-        messages.append(
-            HumanMessage(
-                content=(
-                    "上一个回复不符合格式要求。"
-                    "请只输出一个 JSON 对象，且如果需要排查必须输出 command，"
-                    "不要输出步骤说明、不要输出自然语言总结。"
+        if response_mode == "answer":
+            final_message = _render_final_message(visible_content)
+            if _final_message_has_required_sections(final_message):
+                append_fault_trace(
+                    "chat_final",
+                    {
+                        "type": "plain_text",
+                        "message": final_message,
+                        "tool_traces": state.get("tool_traces") or [],
+                    },
                 )
+                log_stage_duration("interpret_model_output", started_at, result_kind="final", reason="plain_text_answer")
+                return {"parsed_response": None, "final_message": final_message, "result_kind": "final"}
+        logger.warning(
+            "模型输出重试 | reason=invalid_json | response_mode=%s | content_preview=%s",
+            response_mode or "-",
+            visible_content[:200],
+        )
+        retry_notice = (
+            "上一个回复不符合格式要求。"
+            "请直接输出最终答案正文。"
+            "不要调用工具、不要输出 JSON、不要输出 command。"
+            if response_mode == "answer"
+            else (
+                "上一个回复不符合格式要求。"
+                "请只输出一个 JSON 对象，且如果需要排查必须输出 command，"
+                "不要输出步骤说明、不要输出自然语言总结。"
             )
         )
+        messages.append(
+            HumanMessage(
+                content=retry_notice
+            )
+        )
+        log_stage_duration("interpret_model_output", started_at, result_kind="retry", reason="invalid_json")
         return {"messages": messages, "parsed_response": None, "result_kind": "retry"}
     response_type = str(parsed.get("type") or parsed.get("mode") or "").strip().lower()
     if response_type in {"final", "answer", "summary"}:
@@ -333,15 +398,21 @@ def interpret_model_output_node(state: FaultChatState) -> FaultChatState:
         if not final_message:
             raise ApiError("模型未返回有效内容")
         if not _final_message_has_required_sections(final_message):
+            logger.warning(
+                "模型输出重试 | reason=missing_required_sections | response_mode=%s | final_preview=%s",
+                response_mode or "-",
+                final_message[:200],
+            )
             messages.append(
                 HumanMessage(
                     content=(
-                        "上一个 final 回复没有按固定模板输出。"
+                        "上一个 final 回复没有输出有效正文。"
                         "请重新输出一个 JSON 对象，保持 `type` 为 `final`，"
-                        "并让 `answer` 严格包含三段：`问题：`、`排查过程：`、`结论：`。"
+                        "并让 `answer` 只包含最终答案正文。"
                     )
                 )
             )
+            log_stage_duration("interpret_model_output", started_at, result_kind="retry", reason="missing_required_sections")
             return {"messages": messages, "parsed_response": parsed, "result_kind": "retry"}
         append_fault_trace(
             "chat_final",
@@ -351,6 +422,7 @@ def interpret_model_output_node(state: FaultChatState) -> FaultChatState:
                 "tool_traces": state.get("tool_traces") or [],
             },
         )
+        log_stage_duration("interpret_model_output", started_at, result_kind="final")
         return {"parsed_response": parsed, "final_message": final_message, "result_kind": "final"}
     if response_type == "clarify":
         questions = parsed.get("questions")
@@ -368,16 +440,42 @@ def interpret_model_output_node(state: FaultChatState) -> FaultChatState:
                 "tool_traces": state.get("tool_traces") or [],
             },
         )
+        log_stage_duration("interpret_model_output", started_at, result_kind="clarify")
         return {"parsed_response": parsed, "final_message": final_message, "result_kind": "clarify"}
     commands = _normalize_command_list(parsed)
+    if response_mode == "answer" and commands:
+        messages.append(
+            HumanMessage(
+                content=(
+                    "当前处于知识库问答模式。"
+                    "不要调用工具，不要编造命令。"
+                    "请重新输出一个 JSON 对象，并只使用 final 或 clarify。"
+                    "如果用户在要代码示例、接口说明或参数解释，请直接回答文本内容。"
+                )
+            )
+        )
+        logger.warning(
+            "模型输出重试 | reason=command_in_answer_mode | response_mode=%s | content_preview=%s",
+            response_mode or "-",
+            visible_content[:200],
+        )
+        messages[0] = messages[0].__class__(content=build_knowledge_answer_system_prompt())
+        log_stage_duration("interpret_model_output", started_at, result_kind="retry", reason="command_in_answer_mode")
+        return {"messages": messages, "parsed_response": parsed, "result_kind": "retry"}
     if not commands:
         final_message = _extract_final_message(parsed, content)
         if not final_message:
+            logger.warning(
+                "模型输出重试 | reason=no_command_or_final | response_mode=%s | content_preview=%s",
+                response_mode or "-",
+                visible_content[:200],
+            )
             messages.append(
                 HumanMessage(
                     content="上一个回复没有给出可执行命令。请重新输出 command / clarify / final 的 JSON 对象。"
                 )
             )
+            log_stage_duration("interpret_model_output", started_at, result_kind="retry", reason="no_command_or_final")
             return {"messages": messages, "parsed_response": parsed, "result_kind": "retry"}
         append_fault_trace(
             "chat_final",
@@ -387,19 +485,27 @@ def interpret_model_output_node(state: FaultChatState) -> FaultChatState:
                 "tool_traces": state.get("tool_traces") or [],
             },
         )
+        log_stage_duration("interpret_model_output", started_at, result_kind="final", reason="fallback")
         return {"parsed_response": parsed, "final_message": final_message, "result_kind": "final"}
     if bool(state.get("playbook_completed")):
+        logger.warning(
+            "模型输出重试 | reason=command_after_playbook_completed | response_mode=%s | content_preview=%s",
+            response_mode or "-",
+            visible_content[:200],
+        )
         messages.append(
             HumanMessage(
                 content=(
                     "playbook 已经执行结束。"
                     "不要继续输出 command，也不要继续调用工具。"
-                    "请直接输出一个 `type=final` 的 JSON 总结，并严格包含：`问题：`、`排查过程：`、`结论：`。"
+                    "请直接输出一个 `type=final` 的 JSON 总结，并让 `answer` 只包含最终答案正文。"
                 )
             )
         )
+        log_stage_duration("interpret_model_output", started_at, result_kind="retry", reason="command_after_playbook_completed")
         return {"messages": messages, "parsed_response": parsed, "result_kind": "retry"}
     messages.append(AIMessage(content=content))
+    log_stage_duration("interpret_model_output", started_at, result_kind="tool_call", command_count=len(commands))
     return {"parsed_response": parsed, "pending_commands": commands, "messages": messages, "result_kind": "tool_call"}
 
 

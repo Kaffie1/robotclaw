@@ -8,7 +8,8 @@
 当前阶段只搭好可导入的结构，不主动接入现有聊天执行链路。
 """
 
-from .embeddings import clear_embeddings_cache, get_embeddings, set_embedding_device_override
+from .embeddings import clear_embeddings_cache, get_embeddings
+from .services import ingest_file, preview_split_file, rebuild_vectorstore_from_knowledge_dir
 from .vectorstore import (
     KnowledgeVectorStoreHandle,
     build_vectorstore,
@@ -45,9 +46,12 @@ __all__ = [
     "clear_embeddings_cache",
     "compute_confidence",
     "get_embeddings",
+    "ingest_file",
     "load_all_documents",
     "load_vectorstore",
+    "preview_split_file",
     "rerank_documents",
+    "rebuild_vectorstore_from_knowledge_dir",
     "reset_vectorstore",
     "retrieve_bm25_documents",
     "retrieve_faq_documents",
@@ -55,5 +59,4 @@ __all__ = [
     "retrieve_tag_filtered_documents",
     "retrieve_vector_documents",
     "select_evidence",
-    "set_embedding_device_override",
 ]

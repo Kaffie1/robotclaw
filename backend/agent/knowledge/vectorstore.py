@@ -1,12 +1,12 @@
-"""本地文件型知识库向量库。
+"""本地文件型单知识库向量库。
 
-不依赖数据库服务，所有索引都直接持久化到本地目录：
+不依赖数据库服务，所有索引都直接持久化到一个本地目录：
 - index.json: embedding 指纹和 chunk 数据
 
 当前实现目标：
 - build/load/reset 生命周期完整
+- 默认只有一个知识库，不再做多库分片
 - 与 `agent.knowledge.retrieval.vector` 对接
-- 保持简单、可调试、可迁移
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import json
 import math
-import os
 from pathlib import Path
 import shutil
 
 from langchain_core.documents import Document
 
+from ...core.config import EMBEDDING_BASE_URL, EMBEDDING_MODEL, EMBEDDING_PROVIDER, VECTOR_DB_DIR
 from .embeddings import get_embeddings
 
 
@@ -34,7 +34,6 @@ class KnowledgeVectorRecord:
 class KnowledgeVectorStoreHandle:
     """知识库向量库句柄。"""
 
-    kb_name: str
     persist_dir: Path
     records: list[KnowledgeVectorRecord]
     embedding_signature: dict[str, str]
@@ -49,25 +48,23 @@ class KnowledgeVectorStoreHandle:
         ]
 
 
-_VECTORSTORE_CACHE: dict[str, KnowledgeVectorStoreHandle] = {}
+_VECTORSTORE_CACHE: KnowledgeVectorStoreHandle | None = None
 
 
 def _vector_db_dir() -> Path:
-    base_dir = Path(__file__).resolve().parents[3]
-    configured = str(os.getenv("VECTOR_DB_DIR") or (base_dir / "data" / "vectorstore")).strip()
-    return Path(configured)
+    return VECTOR_DB_DIR
 
 
 def _embedding_provider() -> str:
-    return str(os.getenv("EMBEDDING_PROVIDER") or "openai").strip().lower() or "openai"
+    return EMBEDDING_PROVIDER
 
 
 def _embedding_model() -> str:
-    return str(os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large").strip() or "text-embedding-3-large"
+    return EMBEDDING_MODEL
 
 
 def _embedding_base_url() -> str:
-    return str(os.getenv("EMBEDDING_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "").strip()
+    return EMBEDDING_BASE_URL
 
 
 def _current_embedding_signature() -> dict[str, str]:
@@ -79,17 +76,16 @@ def _current_embedding_signature() -> dict[str, str]:
     }
 
 
-def _index_path(kb_name: str) -> Path:
-    return get_vectorstore_dir(kb_name) / "index.json"
+def _index_path() -> Path:
+    return get_vectorstore_dir() / "index.json"
 
 
-def get_vectorstore_dir(kb_name: str) -> Path:
-    normalized = str(kb_name or "default").strip() or "default"
-    return _vector_db_dir() / normalized
+def get_vectorstore_dir() -> Path:
+    return _vector_db_dir()
 
 
-def ensure_vectorstore_dir(kb_name: str) -> Path:
-    target = get_vectorstore_dir(kb_name)
+def ensure_vectorstore_dir() -> Path:
+    target = get_vectorstore_dir()
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -103,35 +99,32 @@ def _record_from_document(doc: Document, embedding: list[float]) -> KnowledgeVec
 
 
 def _dump_handle(handle: KnowledgeVectorStoreHandle) -> None:
-    ensure_vectorstore_dir(handle.kb_name)
+    ensure_vectorstore_dir()
     payload = {
-        "kb_name": handle.kb_name,
         "embedding_signature": handle.embedding_signature,
         "records": [asdict(record) for record in handle.records],
     }
-    _index_path(handle.kb_name).write_text(
-        json.dumps(payload, ensure_ascii=False),
+    _index_path().write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def _load_payload(kb_name: str) -> dict:
-    index_path = _index_path(kb_name)
+def _load_payload() -> dict:
+    index_path = _index_path()
     if not index_path.exists():
-        raise RuntimeError(f"知识库 '{kb_name}' 尚未构建本地向量索引。")
+        raise RuntimeError("默认知识库尚未构建本地向量索引。")
     try:
         return json.loads(index_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"知识库 '{kb_name}' 的本地向量索引损坏：{exc}") from exc
+        raise RuntimeError(f"默认知识库的本地向量索引损坏：{exc}") from exc
 
 
-def _restore_handle(kb_name: str, payload: dict) -> KnowledgeVectorStoreHandle:
+def _restore_handle(payload: dict) -> KnowledgeVectorStoreHandle:
     stored_signature = dict(payload.get("embedding_signature") or {})
     current_signature = _current_embedding_signature()
     if stored_signature and stored_signature != current_signature:
-        raise RuntimeError(
-            f"知识库 '{kb_name}' 的 embedding 配置与当前环境不一致。"
-        )
+        raise RuntimeError("默认知识库的 embedding 配置与当前环境不一致。")
     records = [
         KnowledgeVectorRecord(
             page_content=str(item.get("page_content", "") or ""),
@@ -141,8 +134,7 @@ def _restore_handle(kb_name: str, payload: dict) -> KnowledgeVectorStoreHandle:
         for item in list(payload.get("records") or [])
     ]
     return KnowledgeVectorStoreHandle(
-        kb_name=kb_name,
-        persist_dir=get_vectorstore_dir(kb_name),
+        persist_dir=get_vectorstore_dir(),
         records=records,
         embedding_signature=stored_signature or current_signature,
     )
@@ -165,14 +157,13 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
 
 def build_vectorstore(
     chunks: list[Document],
-    kb_name: str,
     replace_existing: bool = True,
 ) -> KnowledgeVectorStoreHandle:
-    normalized_kb = str(kb_name or "default").strip() or "default"
+    global _VECTORSTORE_CACHE
     if replace_existing:
-        reset_vectorstore(kb_name=normalized_kb, silent=True)
+        reset_vectorstore(silent=True)
 
-    ensure_vectorstore_dir(normalized_kb)
+    ensure_vectorstore_dir()
     embeddings = get_embeddings()
     texts = [chunk.page_content for chunk in chunks]
     vectors = embeddings.embed_documents(texts) if texts else []
@@ -181,24 +172,22 @@ def build_vectorstore(
         for chunk, vector in zip(chunks, vectors)
     ]
     handle = KnowledgeVectorStoreHandle(
-        kb_name=normalized_kb,
-        persist_dir=get_vectorstore_dir(normalized_kb),
+        persist_dir=get_vectorstore_dir(),
         records=records,
         embedding_signature=_current_embedding_signature(),
     )
     _dump_handle(handle)
-    _VECTORSTORE_CACHE[normalized_kb] = handle
+    _VECTORSTORE_CACHE = handle
     return handle
 
 
-def load_vectorstore(kb_name: str) -> KnowledgeVectorStoreHandle:
-    normalized_kb = str(kb_name or "default").strip() or "default"
-    cached = _VECTORSTORE_CACHE.get(normalized_kb)
-    if cached is not None:
-        return cached
-    payload = _load_payload(normalized_kb)
-    handle = _restore_handle(normalized_kb, payload)
-    _VECTORSTORE_CACHE[normalized_kb] = handle
+def load_vectorstore() -> KnowledgeVectorStoreHandle:
+    global _VECTORSTORE_CACHE
+    if _VECTORSTORE_CACHE is not None:
+        return _VECTORSTORE_CACHE
+    payload = _load_payload()
+    handle = _restore_handle(payload)
+    _VECTORSTORE_CACHE = handle
     return handle
 
 
@@ -224,11 +213,11 @@ def search_vectorstore(
     return ranked[: max(1, top_k)]
 
 
-def reset_vectorstore(*, kb_name: str, silent: bool = False) -> None:
-    normalized_kb = str(kb_name or "default").strip() or "default"
-    _VECTORSTORE_CACHE.pop(normalized_kb, None)
-    persist_dir = get_vectorstore_dir(normalized_kb)
+def reset_vectorstore(*, silent: bool = False) -> None:
+    global _VECTORSTORE_CACHE
+    _VECTORSTORE_CACHE = None
+    persist_dir = get_vectorstore_dir()
     if persist_dir.exists():
         shutil.rmtree(persist_dir, ignore_errors=True)
     elif not silent:
-        raise RuntimeError(f"知识库 '{normalized_kb}' 的本地向量目录不存在。")
+        raise RuntimeError("默认知识库的本地向量目录不存在。")

@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ...core.config import QUESTION_COLLECTION_PATH
 from ...core.models import ApiError
 
 
@@ -197,6 +198,19 @@ def append_chat_history_turn(
     if max_messages > 0 and len(history) > max_messages:
         del history[:-max_messages]
     _write_chat_history_file(tool_context, history)
+
+
+def append_collected_question(question: str) -> None:
+    normalized_question = str(question or "").strip()
+    if not normalized_question:
+        return
+    path = QUESTION_COLLECTION_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(normalized_question + "\n")
+    except OSError:
+        return
 
 
 def clear_chat_history(tool_context: dict[str, Any] | None) -> None:

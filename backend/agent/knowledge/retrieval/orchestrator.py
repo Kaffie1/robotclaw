@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
+from ....core.config import LOW_CONFIDENCE_THRESHOLD, TOP_K
 from .common import extract_terms
 from .models import EvidenceItem, EvidenceResult
 from .reranker import compute_confidence
@@ -24,8 +25,8 @@ def select_evidence(
     *,
     docs: list[Document],
     query: str,
-    top_k: int,
-    low_confidence_threshold: float,
+    top_k: int = TOP_K,
+    low_confidence_threshold: float = LOW_CONFIDENCE_THRESHOLD,
 ) -> EvidenceResult:
     evidence_docs = docs[:top_k]
     evidence_scores = [float(doc.metadata.get("_retrieval_score", 0.0) or 0.0) for doc in evidence_docs]

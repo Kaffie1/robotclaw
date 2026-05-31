@@ -9,7 +9,6 @@ from langchain_core.documents import Document
 
 @dataclass
 class RetrievalRequest:
-    kb_name: str
     query: str
     top_k: int
     exclude_chunk_keys: set[str] = field(default_factory=set)

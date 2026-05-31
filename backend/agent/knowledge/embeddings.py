@@ -1,42 +1,51 @@
 """Embedding 模型工厂。
 
-先沿用上级 knowledge 项目的职责边界：
-- provider/model/device 解析
+职责保持简单：
+- provider/model 解析
 - embedding 实例缓存
-- runtime device override
-
-当前仓库还没接入知识库配置，因此这里保持 import-safe，
-只有真正调用时才按配置解析 provider 并尝试构建模型。
+- 本机默认设备自动探测
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-_EMBEDDING_DEVICE_OVERRIDE: str | None = None
-
+from ...core.config import (
+    EMBEDDING_API_KEY,
+    EMBEDDING_BASE_URL,
+    EMBEDDING_MODEL,
+    EMBEDDING_PROVIDER,
+)
 
 def _embedding_provider() -> str:
-    return str(os.getenv("EMBEDDING_PROVIDER") or "openai").strip().lower() or "openai"
+    return EMBEDDING_PROVIDER
 
 
 def _embedding_model() -> str:
-    return str(os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large").strip() or "text-embedding-3-large"
+    return EMBEDDING_MODEL
 
 
 def _embedding_base_url() -> str:
-    return str(os.getenv("EMBEDDING_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "").strip()
+    return EMBEDDING_BASE_URL
 
 
 def _embedding_api_key() -> str:
-    return str(os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+    return EMBEDDING_API_KEY
 
 
 def _embedding_device() -> str:
-    return str(os.getenv("EMBEDDING_DEVICE") or "cpu").strip() or "cpu"
+    try:
+        import torch
+    except ImportError:
+        return "cpu"
+    try:
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
 
 
 def _should_disable_openai_length_check(base_url: str) -> bool:
@@ -111,20 +120,12 @@ def clear_embeddings_cache() -> None:
     _build_openai_embeddings.cache_clear()
 
 
-def set_embedding_device_override(device: str | None) -> None:
-    global _EMBEDDING_DEVICE_OVERRIDE
-    if _EMBEDDING_DEVICE_OVERRIDE == device:
-        return
-    _EMBEDDING_DEVICE_OVERRIDE = device
-    clear_embeddings_cache()
-
-
 def get_embeddings():
     provider = _embedding_provider()
     model = _embedding_model()
 
     if provider == "huggingface":
-        runtime_device = _EMBEDDING_DEVICE_OVERRIDE or _embedding_device()
+        runtime_device = _embedding_device()
         try:
             return _build_huggingface_embeddings(model, runtime_device)
         except Exception as exc:

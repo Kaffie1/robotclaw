@@ -34,12 +34,51 @@ def normalize_app_edition(value: str) -> str:
         return "robot"
     return "server"
 
+# ========== OpenAI API 配置 ==========
 OPENAI_API_KEY = str(os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = str(os.getenv("OPENAI_BASE_URL") or "").strip()
 OPENAI_CHAT_MODEL = str(os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini").strip() or "gpt-4.1-mini"
 OPENAI_CHAT_TEMPERATURE = float(str(os.getenv("OPENAI_CHAT_TEMPERATURE") or "0.2").strip() or "0.2")
 OPENAI_ENABLE_REASONING_SPLIT = str(os.getenv("OPENAI_ENABLE_REASONING_SPLIT") or "").strip().lower() in {"1", "true", "yes", "on"}
 OPENAI_THINK = str(os.getenv("OPENAI_THINK") or "").strip()
+
+# ========== Embedding 配置 ==========
+EMBEDDING_PROVIDER = str(os.getenv("EMBEDDING_PROVIDER") or "huggingface").strip() or "huggingface"  # Embedding提供者: "huggingface" 或 "openai"
+EMBEDDING_API_KEY = str(os.getenv("EMBEDDING_API_KEY") or "").strip()  # Embedding API密钥
+EMBEDDING_BASE_URL = str(os.getenv("EMBEDDING_BASE_URL") or "").strip()  # Embedding API地址
+EMBEDDING_MODEL = str(os.getenv("EMBEDDING_MODEL") or "BAAI/bge-small-zh-v1.5").strip()    # Embedding模型名称  
+EMBEDDING_DEVICE = str(os.getenv("EMBEDDING_DEVICE") or "cuda").strip() or "cuda"
+
+# ========== MinerU 配置 ==========
+MINERU_BIN = str(os.getenv("MINERU_BIN") or "/home/naviai/miniconda3/envs/py310/bin/mineru").strip()
+MINERU_BACKEND = str(os.getenv("MINERU_BACKEND") or "vlm-auto-engine").strip() or "vlm-auto-engine"
+MINERU_MODEL_SOURCE = str(os.getenv("MINERU_MODEL_SOURCE") or "local").strip() or "local"
+MINERU_OUTPUT_DIR = str(os.getenv("MINERU_OUTPUT_DIR") or "./data/raw/mineru").strip() or "./data/raw/mineru"
+MINERU_TIMEOUT_SECONDS = int(str(os.getenv("MINERU_TIMEOUT_SECONDS") or "600").strip() or "600")
+MINERU_API_URL = str(os.getenv("MINERU_API_URL") or "").strip()
+MINERU_PTXAS_PATH = str(os.getenv("MINERU_PTXAS_PATH") or "/usr/local/cuda/bin/ptxas").strip() or "/usr/local/cuda/bin/ptxas"
+MINERU_SERVER_URL = str(os.getenv("MINERU_SERVER_URL") or "").strip()
+
+# ========== 文本切分配置 ==========
+CHUNK_SIZE = 512      # 每个文本块的最大字符数
+CHUNK_OVERLAP = 50    # 相邻文本块之间的重叠字符数（保持语义连贯）
+
+# ========== 检索配置 ==========
+TOP_K = 4                               # 检索时返回最相似的 Top-K 个文档块
+MAX_RETRIEVAL_ROUNDS = 3                # 检索-生成最多循环轮数
+LOW_CONFIDENCE_THRESHOLD = 0.45         # 低于该证据置信度时进入人工审核
+ENABLE_RETRIEVAL_CONVERSATION_HISTORY = False
+ENABLE_HYDE_QUERY_REWRITE = False
+ENABLE_MEMORY_CONTEXT = False
+ENABLE_LLM_CLASSIFICATION = False
+ENABLE_RERANKER = False
+RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"  # 重排模型名称
+RERANKER_DEVICE = "auto"                    # 重排模型运行设备: "auto"、"cuda" 或 "cpu"
+RERANKER_MAX_CANDIDATES = 5                 # 重排最多处理的候选数
+ENABLE_VECTOR_QUERY_VARIANTS = False
+
+# ========== 调试显示配置 ==========
+SHOW_CHUNK_CONTENT = str(os.getenv("SHOW_CHUNK_CONTENT") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 APP_HOST = "0.0.0.0"
 APP_PORT = 8005
@@ -50,8 +89,11 @@ STATIC_DIR = BASE_DIR / "static"
 TEMPLATE_DIR = BASE_DIR / "templates"
 LOCAL_MODULE_DIR = BASE_DIR / "module"
 DATA_DIR = BASE_DIR / "data"
+KNOWLEDGE_DIR = DATA_DIR / "knowledge"
 RUNTIME_DIR = BASE_DIR / ".runtime"
 DOCS_DIR = BASE_DIR / "doc"
+QUESTION_COLLECTION_PATH = DATA_DIR / "chat" / "collected_questions.txt"
+VECTOR_DB_DIR = DATA_DIR / "vectorstore"
 WORKFLOWS_DIR = BASE_DIR / "workflows"
 FAULT_WORKFLOWS_DIR = WORKFLOWS_DIR / "fault"
 NORMAL_WORKFLOWS_DIR = WORKFLOWS_DIR / "normal"

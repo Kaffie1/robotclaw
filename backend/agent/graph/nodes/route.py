@@ -9,6 +9,7 @@ from ....runtime.workflow.playbook_state import build_matched_playbook_payload, 
 from ...prompts.route import build_fault_route_prompt
 from ...shared.model_factory import build_router_model, invoke_chat_model
 from ..state import FaultChatState, FaultRouteState
+from ..timing import log_stage_duration, start_stage_timer
 
 try:
     from langgraph.types import interrupt
@@ -20,12 +21,14 @@ def _publish_selected_playbook(
     playbooks: list[dict[str, Any]] | None,
     selected_playbook_id: str,
     *,
+    selected_playbook_type: str = "",
     session_id: str = "",
 ) -> None:
     normalized_playbook_id = normalize_message_content(selected_playbook_id)
+    normalized_playbook_type = normalize_message_content(selected_playbook_type).lower()
     if not normalized_playbook_id:
         return
-    selected_playbook = find_playbook_by_id(normalized_playbook_id, workflow_type="fault")
+    selected_playbook = find_playbook_by_id(normalized_playbook_id, workflow_type=normalized_playbook_type or None)
     if not isinstance(selected_playbook, dict):
         selected_playbook = next(
             (
@@ -47,43 +50,75 @@ def _publish_selected_playbook(
 
 
 def resolve_playbook_route(state: FaultRouteState, *, publish: bool = True) -> FaultRouteState:
+    started_at = start_stage_timer()
     session_id = normalize_message_content(state.get("session_id", ""))
     continuation = state.get("resume_continuation")
     if isinstance(continuation, dict):
         continuation_kind = normalize_message_content(continuation.get("kind", ""))
         selected_playbook_id = normalize_message_content(continuation.get("playbook_id", ""))
         selected_playbook_title = normalize_message_content(continuation.get("playbook_title", ""))
+        selected_playbook_type = normalize_message_content(continuation.get("playbook_type", ""))
         reason = normalize_message_content(continuation.get("reason", "")) or "继续执行人工确认后的 playbook"
-        if selected_playbook_id and not selected_playbook_title:
+        if selected_playbook_id and (not selected_playbook_title or not selected_playbook_type):
             for item in state.get("playbooks") or []:
                 if item.get("id") == selected_playbook_id:
                     selected_playbook_title = normalize_message_content(item.get("title", ""))
+                    selected_playbook_type = normalize_message_content(item.get("type", ""))
                     break
         if publish and continuation_kind != "playbook_confirmation":
-            _publish_selected_playbook(state.get("playbooks"), selected_playbook_id, session_id=session_id)
+            _publish_selected_playbook(
+                state.get("playbooks"),
+                selected_playbook_id,
+                selected_playbook_type=selected_playbook_type,
+                session_id=session_id,
+            )
+        log_stage_duration(
+            "route_playbook",
+            started_at,
+            selected_playbook_id=selected_playbook_id,
+            selected_playbook_type=selected_playbook_type,
+            source="continuation",
+        )
         return {
             "selected_playbook_id": selected_playbook_id,
             "selected_playbook_title": selected_playbook_title,
+            "selected_playbook_type": selected_playbook_type,
             "reason": reason,
         }
     prefetched_playbook_id = normalize_message_content(state.get("prefetched_playbook_id", ""))
     if prefetched_playbook_id:
         prefetched_playbook_title = normalize_message_content(state.get("prefetched_playbook_title", ""))
+        prefetched_playbook_type = normalize_message_content(state.get("prefetched_playbook_type", ""))
         prefetched_reason = normalize_message_content(state.get("prefetched_reason", ""))
         if publish:
-            _publish_selected_playbook(state.get("playbooks"), prefetched_playbook_id, session_id=session_id)
+            _publish_selected_playbook(
+                state.get("playbooks"),
+                prefetched_playbook_id,
+                selected_playbook_type=prefetched_playbook_type,
+                session_id=session_id,
+            )
+        log_stage_duration(
+            "route_playbook",
+            started_at,
+            selected_playbook_id=prefetched_playbook_id,
+            selected_playbook_type=prefetched_playbook_type,
+            source="prefetched",
+        )
         return {
             "selected_playbook_id": prefetched_playbook_id,
             "selected_playbook_title": prefetched_playbook_title,
+            "selected_playbook_type": prefetched_playbook_type,
             "reason": prefetched_reason,
         }
 
     user_message = normalize_message_content(state.get("user_message", ""))
     playbooks = state.get("playbooks") or []
     if not user_message or not playbooks:
+        log_stage_duration("route_playbook", started_at, selected_playbook_id="", source="empty")
         return {
             "selected_playbook_id": "",
             "selected_playbook_title": "",
+            "selected_playbook_type": "",
             "reason": "",
         }
 
@@ -113,26 +148,43 @@ def resolve_playbook_route(state: FaultRouteState, *, publish: bool = True) -> F
     selected_playbook_id = normalize_message_content(parsed.get("playbook_id", "")) if parsed else ""
     reason = normalize_message_content(parsed.get("reason", "")) if parsed else ""
     selected_title = ""
+    selected_type = ""
     for item in playbooks:
         if item.get("id") == selected_playbook_id:
             selected_title = normalize_message_content(item.get("title", ""))
+            selected_type = normalize_message_content(item.get("type", ""))
             break
     if not selected_title:
         selected_playbook_id = ""
+        selected_type = ""
     append_fault_trace(
         "route_model_decision",
         {
             "selected_playbook_id": selected_playbook_id,
             "selected_playbook_title": selected_title,
+            "selected_playbook_type": selected_type,
             "reason": reason,
             "parsed": parsed,
         },
     )
     if publish:
-        _publish_selected_playbook(playbooks, selected_playbook_id, session_id=session_id)
+        _publish_selected_playbook(
+            playbooks,
+            selected_playbook_id,
+            selected_playbook_type=selected_type,
+            session_id=session_id,
+        )
+    log_stage_duration(
+        "route_playbook",
+        started_at,
+        selected_playbook_id=selected_playbook_id,
+        selected_playbook_type=selected_type,
+        candidate_count=len(playbooks),
+    )
     return {
         "selected_playbook_id": selected_playbook_id,
         "selected_playbook_title": selected_title,
+        "selected_playbook_type": selected_type,
         "reason": reason,
     }
 
@@ -142,19 +194,24 @@ def route_playbook_node(state: FaultRouteState) -> FaultRouteState:
 
 
 def wait_for_playbook_render_node(state: FaultChatState) -> FaultChatState:
+    started_at = start_stage_timer()
     selected_playbook_id = normalize_message_content(state.get("selected_playbook_id", ""))
+    selected_playbook_type = normalize_message_content(state.get("selected_playbook_type", ""))
     if not selected_playbook_id:
+        log_stage_duration("wait_playbook_render", started_at, playbook_id="", skipped=True)
         return {"playbook_render_ready": True}
     resume_continuation = state.get("resume_continuation")
     continuation_kind = normalize_message_content((resume_continuation or {}).get("kind", "")) if isinstance(resume_continuation, dict) else ""
     if continuation_kind == "playbook_confirmation":
         logger.info("人工确认恢复时跳过流程图重新渲染等待 | playbook_id=%s", selected_playbook_id)
+        log_stage_duration("wait_playbook_render", started_at, playbook_id=selected_playbook_id, skipped=True)
         return {"playbook_render_ready": True}
 
-    playbook = find_playbook_by_id(selected_playbook_id, workflow_type="fault")
+    playbook = find_playbook_by_id(selected_playbook_id, workflow_type=selected_playbook_type or None)
     pending_playbook_render = {
         "type": "playbook_render_ready",
         "playbook_id": selected_playbook_id,
+        "playbook_type": selected_playbook_type,
         "playbook_title": normalize_message_content(state.get("selected_playbook_title", "")),
         "reason": normalize_message_content(state.get("reason", "")),
         "message": "流程图已准备好，等待前端确认加载完成后继续执行。",
@@ -162,10 +219,12 @@ def wait_for_playbook_render_node(state: FaultChatState) -> FaultChatState:
     }
     if interrupt is None:
         logger.info("langgraph interrupt 不可用，跳过前端渲染等待 | playbook_id=%s", selected_playbook_id)
+        log_stage_duration("wait_playbook_render", started_at, playbook_id=selected_playbook_id, skipped=True)
         return {"playbook_render_ready": True}
     logger.info("等待前端流程图加载完成（interrupt） | playbook_id=%s", selected_playbook_id)
     resume_value = interrupt(pending_playbook_render)
     logger.info("前端流程图已加载完成，继续执行 | playbook_id=%s | resume_value=%s", selected_playbook_id, bool(resume_value))
+    log_stage_duration("wait_playbook_render", started_at, playbook_id=selected_playbook_id, resumed=bool(resume_value))
     return {"playbook_render_ready": True}
 
 

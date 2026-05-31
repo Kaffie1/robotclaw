@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from langchain_core.documents import Document
 
+from ....core.config import RERANKER_MAX_CANDIDATES
+
 
 def rerank_documents(
     docs: list[Document],
     query: str,
-    max_candidates: int | None = None,
+    max_candidates: int | None = RERANKER_MAX_CANDIDATES,
 ) -> list[Document]:
     del query
     if max_candidates is None or max_candidates <= 0:
