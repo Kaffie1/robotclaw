@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RobotClaw</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div class="brand-text">RobotClaw</div>
+        </div>
+
+        <button class="new-session-button" id="newSessionButton" type="button">
+          <span class="new-session-plus">+</span>
+          <span>新建会话</span>
+        </button>
+
+        <section class="session-panel">
+          <div class="section-title">会话列表</div>
+          <div class="session-list" id="sessionList"></div>
+        </section>
+
+        <button class="settings-link" type="button">
+          <span class="settings-icon">⚙</span>
+          <span>设置</span>
+        </button>
+      </aside>
+
+      <main class="chat-stage">
+        <section class="chat-card">
+          <div class="chat-scroll" id="chatScroll"></div>
+
+          <div class="composer">
+            <textarea
+              id="messageInput"
+              class="composer-input"
+              rows="1"
+              placeholder="请输入你的问题..."
+            ></textarea>
+            <div class="composer-actions">
+              <div class="composer-tools">
+                <button class="icon-button sprite sprite-attach" type="button" title="附件"></button>
+                <button class="icon-button sprite sprite-command" type="button" title="命令"></button>
+              </div>
+              <button class="send-button sprite sprite-send" id="sendButton" type="button" title="发送"></button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <aside class="connection-panel">
+        <h2 class="panel-heading">机器人连接</h2>
+
+        <section class="connection-card" id="connectionCard">
+          <div class="connection-topline">
+            <div class="connection-status" id="connectionStatus">
+              <span class="status-dot"></span>
+              <span class="status-text">未连接</span>
+            </div>
+            <button class="card-menu" type="button" title="更多">⋮</button>
+          </div>
+
+          <div class="connection-summary">
+            <div class="robot-avatar" id="robotAvatar" aria-hidden="true">
+              <img src="./assets/robot-full.png" alt="" />
+            </div>
+            <div class="robot-meta">
+              <div class="robot-name-row">
+                <span class="robot-name" id="robotName">未选择机器人</span>
+              </div>
+              <div class="robot-detail-row">
+                <span class="robot-detail-label">IP</span>
+                <span class="robot-detail-value" id="robotHost">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="connection-hero sprite sprite-robot" aria-hidden="true"></div>
+        </section>
+
+        <form class="connection-form" id="connectionForm">
+          <label class="field">
+            <span>机器人名称</span>
+            <input id="connectName" name="name" type="text" placeholder="robot-001" />
+          </label>
+          <label class="field">
+            <span>IP 地址</span>
+            <input id="connectHost" name="host" type="text" placeholder="192.168.1.100" />
+          </label>
+
+          <div class="connection-actions">
+            <button class="primary-button" id="connectButton" type="submit">连接机器人</button>
+            <button class="ghost-button" id="disconnectButton" type="button">断开连接</button>
+          </div>
+        </form>
+      </aside>
+    </div>
+
+    <template id="messageTemplate">
+      <article class="message">
+        <div class="message-bubble"></div>
+        <div class="message-time"></div>
+      </article>
+    </template>
+
+    <template id="sessionTemplate">
+      <button class="session-item" type="button">
+        <div class="session-title"></div>
+        <div class="session-preview"></div>
+      </button>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
