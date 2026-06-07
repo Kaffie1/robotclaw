@@ -100,6 +100,7 @@ def create_module_workflow_task_runner(
             "upload_token": upload_token,
         }
         set_runtime_value(workflow_context, "upload_token", upload_token)
+        set_runtime_value(workflow_context, "package_sources", package_sources)
         try:
             from backend.runtime.playbooks import run_scripted_playbook_by_id
 

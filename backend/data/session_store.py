@@ -105,11 +105,128 @@ class SessionStore:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
 
+    def ensure_chat_state(self, session: dict[str, Any]) -> dict[str, Any]:
+        chat_state = session.get("chat_state")
+        if not isinstance(chat_state, dict):
+            chat_state = {}
+            session["chat_state"] = chat_state
+        return chat_state
+
+    def clear_chat_state(self, session: dict[str, Any]) -> None:
+        self.ensure_chat_state(session).clear()
+
+    def get_client(self, session: dict[str, Any]) -> RobotClient:
+        client = session.get("client")
+        if not isinstance(client, RobotClient):
+            raise TypeError("session 中缺少有效的 RobotClient")
+        return client
+
+    def is_connected(self, session: dict[str, Any]) -> bool:
+        return bool(self.get_client(session).connected)
+
+    def get_session_id(self, session: dict[str, Any]) -> str:
+        return str(session.get("session_id") or "").strip()
+
+    def set_last_config(self, session: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+        normalized = {
+            "host": str(config.get("host") or "").strip(),
+            "port": int(config.get("port") or 22),
+            "username": str(config.get("username") or "").strip(),
+            "pico_host": str(config.get("pico_host") or "").strip(),
+            "pico_port": int(config.get("pico_port") or 22),
+            "pico_username": str(config.get("pico_username") or "").strip(),
+        }
+        session["last_config"] = normalized
+        return normalized
+
+    def get_last_config(self, session: dict[str, Any]) -> dict[str, Any]:
+        config = session.get("last_config")
+        if isinstance(config, dict):
+            return config
+        return self.set_last_config(session, {})
+
+    def set_ssh_auth(self, session: dict[str, Any], *, username: str = "", password: str = "") -> dict[str, Any]:
+        auth = {"username": str(username or "").strip(), "password": str(password or "")}
+        session["ssh_auth"] = auth
+        return auth
+
+    def get_ssh_auth(self, session: dict[str, Any]) -> dict[str, Any]:
+        auth = session.get("ssh_auth")
+        if isinstance(auth, dict):
+            return auth
+        return self.set_ssh_auth(session)
+
+    def set_processor_auth(
+        self,
+        session: dict[str, Any],
+        *,
+        orin: dict[str, Any] | None = None,
+        pico: dict[str, Any] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        processor_auth = {
+            "ORIN": {
+                "host": str((orin or {}).get("host") or "").strip(),
+                "port": int((orin or {}).get("port") or 22),
+                "username": str((orin or {}).get("username") or "").strip(),
+                "password": str((orin or {}).get("password") or ""),
+            },
+            "PICO": {
+                "host": str((pico or {}).get("host") or "").strip(),
+                "port": int((pico or {}).get("port") or 22),
+                "username": str((pico or {}).get("username") or "").strip(),
+                "password": str((pico or {}).get("password") or ""),
+            },
+        }
+        session["processor_auth"] = processor_auth
+        return processor_auth
+
+    def get_processor_auth(self, session: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        auth = session.get("processor_auth")
+        if isinstance(auth, dict):
+            return auth
+        return self.set_processor_auth(session)
+
+    def set_remote_shortcuts(self, session: dict[str, Any], *, shortcuts: list[Any], preferred_root: str) -> None:
+        session["remote_shortcuts"] = list(shortcuts or [])
+        session["preferred_root"] = str(preferred_root or "/").strip() or "/"
+
+    def get_remote_shortcuts(self, session: dict[str, Any]) -> list[Any]:
+        shortcuts = session.get("remote_shortcuts")
+        return list(shortcuts or []) if isinstance(shortcuts, list) else []
+
+    def get_preferred_root(self, session: dict[str, Any]) -> str:
+        return str(session.get("preferred_root") or "/").strip() or "/"
+
+    def clear_remote_shortcuts(self, session: dict[str, Any]) -> None:
+        self.set_remote_shortcuts(session, shortcuts=[], preferred_root="/")
+
+    def set_path_cache(self, session: dict[str, Any], paths: list[Any]) -> None:
+        session["path_cache"] = list(paths or [])
+
+    def get_path_cache(self, session: dict[str, Any]) -> list[Any]:
+        paths = session.get("path_cache")
+        return list(paths or []) if isinstance(paths, list) else []
+
+    def set_last_remote_deb_path(self, session: dict[str, Any], remote_path: str) -> None:
+        session["last_remote_deb_path"] = str(remote_path or "").strip()
+
+    def get_last_remote_deb_path(self, session: dict[str, Any]) -> str:
+        return str(session.get("last_remote_deb_path") or "").strip()
+
+    def set_chat_history_path(self, session: dict[str, Any], path: str | Path) -> None:
+        session["chat_history_path"] = str(path or "").strip()
+
+    def get_chat_history_path(self, session: dict[str, Any]) -> Path | None:
+        raw_path = str(session.get("chat_history_path") or "").strip()
+        if not raw_path:
+            return None
+        return Path(raw_path)
+
     def _release_session_resources(self, session: dict[str, Any]) -> None:
         client = session.get("client")
         if isinstance(client, RobotClient):
             client.close()
-        session["chat_state"] = {}
+        self.clear_chat_state(session)
 
     def get_or_create(self, sid: str | None) -> tuple[str, dict[str, Any], bool]:
         with self.lock:

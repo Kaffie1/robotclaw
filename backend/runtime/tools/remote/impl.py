@@ -4,6 +4,7 @@ import shlex
 from typing import Any
 
 from backend.core.models import ApiError
+from backend.infra.container import session_store
 from ..common import build_command_output_text
 
 
@@ -88,7 +89,7 @@ def remote_scan_paths(client, root: str, keyword: str, session: dict[str, Any]) 
     entries = client.walk_entries(resolved_root)
     all_paths = [resolved_root, *[entry["path"] for entry in entries]]
     all_directories = [resolved_root, *[entry["path"] for entry in entries if entry["is_dir"]]]
-    session["path_cache"] = all_paths
+    session_store.set_path_cache(session, all_paths)
     normalized_keyword = str(keyword or "").strip().lower()
     if normalized_keyword:
         paths = [item for item in all_paths if normalized_keyword in item.lower()]
@@ -107,8 +108,11 @@ def remote_scan_paths(client, root: str, keyword: str, session: dict[str, Any]) 
 def remote_shortcuts(client, *, should_cache: bool, session: dict[str, Any]) -> dict[str, Any]:
     shortcut_payload = client.directory_shortcuts()
     if should_cache:
-        session["remote_shortcuts"] = shortcut_payload["shortcuts"]
-        session["preferred_root"] = shortcut_payload["preferred_root"]
+        session_store.set_remote_shortcuts(
+            session,
+            shortcuts=shortcut_payload["shortcuts"],
+            preferred_root=shortcut_payload["preferred_root"],
+        )
     return shortcut_payload
 
 

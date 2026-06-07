@@ -19,7 +19,7 @@ from ...runtime.workflow.playbook_state import (
 from ...core.config import MAX_TASK_ITEMS
 from ...core.models import ToolCallPayload
 from ...core.shared import logger
-from ...infra.container import task_manager
+from ...infra.container import session_store, task_manager
 from ...runtime.tools import tool_registry
 from ...runtime.workflow.confirmation import (
     append_chat_history_turn,
@@ -58,7 +58,7 @@ async def api_chat(request: Request):
         user_message = message
         tool_context = {"session_id": session_id}
         append_collected_question(user_message)
-    last_config = session.get("last_config") or {}
+    last_config = session_store.get_last_config(session)
     route_selection_payload = build_matched_playbook_payload_by_id(
         str((route_selection or {}).get("playbook_id") or "").strip(),
         workflow_type=str((route_selection or {}).get("playbook_type") or "").strip() or None,
@@ -83,11 +83,11 @@ async def api_chat(request: Request):
         run_fault_chat_graph,
         user_message,
         runtime_context={
-            "connected": bool(session["client"].connected),
+            "connected": session_store.is_connected(session),
             "host": str(last_config.get("host") or ""),
             "port": str(last_config.get("port") or ""),
             "username": str(last_config.get("username") or ""),
-            "preferred_root": str(session.get("preferred_root") or "/"),
+            "preferred_root": session_store.get_preferred_root(session),
             "recent_tasks": task_manager.list_tasks_for_owner(session_id, MAX_TASK_ITEMS),
         },
         tool_context=tool_context,

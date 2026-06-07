@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from ...core.models import ApiError
-from ...infra.container import connection_cache_store
+from ...infra.container import connection_cache_store, session_store
 
 _GZ_LOG_NAME_PATTERN = re.compile(
     r"^(?P<stamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:-\d{1,6})?)\..*\.gz$",
@@ -74,7 +74,7 @@ def build_log_archive_name(device_type: str, start_at: str, end_at: str) -> str:
 def hydrate_session_last_config_from_cache(session: dict[str, Any]) -> None:
     if not isinstance(session, dict):
         return
-    last_config = session.get("last_config") if isinstance(session.get("last_config"), dict) else {}
+    last_config = session_store.get_last_config(session)
     host = str(last_config.get("host") or "").strip()
     username = str(last_config.get("username") or "").strip()
     if host and username:
@@ -87,32 +87,34 @@ def hydrate_session_last_config_from_cache(session: dict[str, Any]) -> None:
     latest_username = str(latest.get("username") or "").strip()
     if not latest_host or not latest_username:
         return
-    session["last_config"] = {
+    session_store.set_last_config(session, {
         "host": latest_host,
         "port": int(latest.get("port") or 22),
         "username": latest_username,
         "pico_host": str(latest.get("pico_host") or "").strip(),
         "pico_port": int(latest.get("pico_port") or 22),
         "pico_username": str(latest.get("pico_username") or "").strip(),
-    }
-    session["ssh_auth"] = {
-        "username": latest_username,
-        "password": str(latest.get("password") or ""),
-    }
-    session["processor_auth"] = {
-        "ORIN": {
+    })
+    session_store.set_ssh_auth(
+        session,
+        username=latest_username,
+        password=str(latest.get("password") or ""),
+    )
+    session_store.set_processor_auth(
+        session,
+        orin={
             "host": latest_host,
             "port": int(latest.get("port") or 22),
             "username": latest_username,
             "password": str(latest.get("password") or ""),
         },
-        "PICO": {
+        pico={
             "host": str(latest.get("pico_host") or "").strip(),
             "port": int(latest.get("pico_port") or 22),
             "username": str(latest.get("pico_username") or "").strip(),
             "password": str(latest.get("pico_password") or ""),
         },
-    }
+    )
 
 
 def build_connection_summary_label(connection: dict[str, Any] | None) -> str:

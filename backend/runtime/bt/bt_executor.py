@@ -8,7 +8,13 @@ import py_trees
 
 from ...core.models import ApiError
 from ..rules import build_playbook_rule_context
-from ..workflow.confirmation import PLAYBOOK_CONTEXT_KEY, PLAYBOOK_CONTEXT_KEYS_KEY, RUNTIME_CONTEXT_KEY, sync_playbook_context_view
+from ..workflow.confirmation import (
+    PLAYBOOK_CONTEXT_KEY,
+    PLAYBOOK_CONTEXT_KEYS_KEY,
+    PLAYBOOK_CONTEXT_SOURCES_KEY,
+    RUNTIME_CONTEXT_KEY,
+    sync_playbook_context_view,
+)
 from .executor import (
     PlaybookConfirmationRequired,
     execute_playbook,
@@ -27,6 +33,27 @@ def _normalize_status(value: str) -> py_trees.common.Status:
     if normalized == "running":
         return py_trees.common.Status.RUNNING
     return py_trees.common.Status.FAILURE
+
+
+def _is_resume_safe_value(value: Any) -> bool:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, list):
+        return all(_is_resume_safe_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _is_resume_safe_value(item) for key, item in value.items())
+    return False
+
+
+def _build_resume_runtime_context(tool_context: dict[str, Any]) -> dict[str, Any]:
+    runtime_context = tool_context.get(RUNTIME_CONTEXT_KEY)
+    if not isinstance(runtime_context, dict):
+        return {}
+    return {
+        str(key): value
+        for key, value in runtime_context.items()
+        if isinstance(key, str) and _is_resume_safe_value(value)
+    }
 
 
 def _is_descendant_node_path(node_path: str, descendant_path: str) -> bool:
@@ -141,6 +168,7 @@ class BehaviourTreeState:
         """构建当前执行状态的可恢复状态字典，包括 playbook_context、completed_nodes、pending_child_resumes 和 interrupt_state 四个部分，供后续恢复执行时使用"""
         return {
             "playbook_context": dict(self.tool_context.get(PLAYBOOK_CONTEXT_KEY) or {}),
+            "runtime_context": _build_resume_runtime_context(self.tool_context),
             "completed_nodes": dict(self.completed_nodes),
             "pending_child_resumes": dict(self.pending_child_resumes),
             "interrupt_state": dict(self.interrupt_state),
@@ -501,6 +529,11 @@ def execute_tree_playbook(
         for key in (raw_context_schema or {}).keys()
         if str(key or "").strip()
     ] if isinstance(raw_context_schema, dict) else []
+    declared_context_sources = {
+        str(key or "").strip(): str((spec or {}).get("source") or "").strip().lower()
+        for key, spec in (raw_context_schema or {}).items()
+        if str(key or "").strip() and isinstance(spec, dict)
+    } if isinstance(raw_context_schema, dict) else {}
     base_tool_context = {
         **dict(tool_context or {}),
         "playbook_id": playbook_id,
@@ -508,8 +541,10 @@ def execute_tree_playbook(
         "playbook_source_path": playbook_source_path,
         "playbook_rules_source_path": playbook_rules_source_path,
     }
+    resumed_runtime_context = dict(resume_state.get("runtime_context") or {}) if isinstance(resume_state, dict) else {}
     base_tool_context[RUNTIME_CONTEXT_KEY] = {
         **(dict(base_tool_context.get(RUNTIME_CONTEXT_KEY) or {}) if isinstance(base_tool_context.get(RUNTIME_CONTEXT_KEY), dict) else {}),
+        **(resumed_runtime_context if isinstance(resumed_runtime_context, dict) else {}),
         "session": base_tool_context.get("session"),
         "session_id": base_tool_context.get("session_id"),
         "playbook_id": playbook_id,
@@ -518,6 +553,8 @@ def execute_tree_playbook(
     resumed_playbook_context = dict(resume_state.get("playbook_context") or {}) if isinstance(resume_state, dict) else {}
     initial_playbook_context = dict(resumed_playbook_context)
     for key in declared_context_keys:
+        if declared_context_sources.get(key) == "runtime":
+            continue
         if key not in base_tool_context:
             continue
         resumed_value = initial_playbook_context.get(key)
@@ -525,6 +562,7 @@ def execute_tree_playbook(
             initial_playbook_context[key] = base_tool_context.get(key)
     base_tool_context[PLAYBOOK_CONTEXT_KEY] = initial_playbook_context
     base_tool_context[PLAYBOOK_CONTEXT_KEYS_KEY] = declared_context_keys
+    base_tool_context[PLAYBOOK_CONTEXT_SOURCES_KEY] = declared_context_sources
     sync_playbook_context_view(base_tool_context)
     playbook_context = build_playbook_rule_context(base_tool_context)
     sync_playbook_context_view(playbook_context)

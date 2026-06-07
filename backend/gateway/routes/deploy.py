@@ -4,7 +4,6 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 
 from ...core.config import DEPLOY_CONFIG_PATH, MODULE_DEPLOY_ROOT
 from ...core.models import ApiError
-from ...runtime.operations.services import ensure_client_connected
 from ...runtime.operations.workflow import (
     create_module_workflow_task_runner,
     create_package_target_client,
@@ -14,7 +13,7 @@ from ...runtime.operations.workflow import (
 from ...core.files import prepare_package_source
 from ...core.validation import require_text
 from ...infra.container import deploy_config_store, task_manager
-from ..support import get_session, get_session_id
+from ..support import get_connected_session_client, get_session, get_session_id
 
 router = APIRouter()
 
@@ -100,7 +99,7 @@ def api_deploy_module(
 ):
     session = get_session(request)
     session_id = get_session_id(request)
-    client = ensure_client_connected(session)
+    client = get_connected_session_client(request)
     selected_module_name = require_text(module_name, "请选择要部署的模块")
     selected_module_path = client.resolve_remote_path(posixpath.join(MODULE_DEPLOY_ROOT, selected_module_name))
     if not client.path_exists(selected_module_path):

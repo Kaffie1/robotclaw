@@ -8,7 +8,7 @@ from backend.core.config import IS_ROBOT_EDITION, PACKAGE_DEPLOY_DIR
 from backend.core.models import ApiError, ConnectionConfig
 from backend.core.shared import render_remote_command, require_text
 from backend.infra import create_ssh_client
-from backend.runtime.operations.services import ensure_client_connected, robot_identity
+from backend.runtime.operations.services import ensure_client_connected, resolve_processor_auth_target, robot_identity
 
 
 def probe_remote_package_supports_credentials(client, remote_path: str) -> bool:
@@ -27,11 +27,8 @@ def resolve_package_target_credentials(
 ) -> dict[str, Any]:
     """解析部署目标的连接信息，优先使用 SSH 连接中配置的目标信息，回退到机器人身份中的默认信息"""
     normalized_device_type = str(device_type or "ORIN").strip().upper() or "ORIN"
-    processor_auth = session.get("processor_auth") or {}
-    target_auth = processor_auth.get(normalized_device_type) if isinstance(processor_auth, dict) else {}
+    target_auth = resolve_processor_auth_target(session, normalized_device_type)
     identity = robot_identity(session)
-    if not isinstance(target_auth, dict):
-        target_auth = {}
     configured_host = str(target_auth.get("host") or "").strip()
     configured_username = str(target_auth.get("username") or "").strip()
     configured_password = str(target_auth.get("password") or "")

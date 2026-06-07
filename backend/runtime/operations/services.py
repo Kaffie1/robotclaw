@@ -3,19 +3,19 @@ from typing import Any
 
 from backend.core.models import ApiError, TaskFailure
 from backend.runtime.tasks import TaskContext
-from backend.infra.container import history_store
+from backend.infra.container import history_store, session_store
 from backend.core.time import now_text
 from backend.core.shared import log_command_result, require_text
 
 
 def ensure_client_connected(session: dict[str, Any]):
-    client = session["client"]
+    client = session_store.get_client(session)
     client.ensure_connected()
     return client
 
 
 def robot_identity(session: dict[str, Any]) -> dict[str, Any]:
-    config = session["last_config"]
+    config = session_store.get_last_config(session)
     return {
         "robot_host": config.get("host", ""),
         "robot_port": config.get("port"),
@@ -24,19 +24,25 @@ def robot_identity(session: dict[str, Any]) -> dict[str, Any]:
 
 
 def current_robot_password(session: dict[str, Any]) -> str:
-    processor_auth = session.get("processor_auth") or {}
-    orin_auth = processor_auth.get("ORIN") if isinstance(processor_auth, dict) else {}
+    orin_auth = resolve_processor_auth_target(session, "ORIN")
     if isinstance(orin_auth, dict) and str(orin_auth.get("password") or ""):
         return str(orin_auth.get("password") or "")
-    ssh_auth = session.get("ssh_auth") or {}
+    ssh_auth = session_store.get_ssh_auth(session)
     if isinstance(ssh_auth, dict):
         return str(ssh_auth.get("password") or "")
     return ""
 
 
+def resolve_processor_auth_target(session: dict[str, Any], device_type: str) -> dict[str, Any]:
+    normalized_device_type = str(device_type or "ORIN").strip().upper() or "ORIN"
+    processor_auth = session_store.get_processor_auth(session)
+    target_auth = processor_auth.get(normalized_device_type) if isinstance(processor_auth, dict) else {}
+    return target_auth if isinstance(target_auth, dict) else {}
+
+
 def ensure_connected_to_history_target(session: dict[str, Any], entry: dict[str, Any]):
     client = ensure_client_connected(session)
-    config = session["last_config"]
+    config = session_store.get_last_config(session)
     if (
         str(config.get("host", "")) != str(entry.get("robot_host", ""))
         or int(config.get("port", 0)) != int(entry.get("robot_port", 0) or 0)
@@ -49,8 +55,11 @@ def ensure_connected_to_history_target(session: dict[str, Any], entry: dict[str,
 def refresh_remote_shortcuts(session: dict[str, Any]) -> dict[str, Any]:
     client = ensure_client_connected(session)
     shortcut_payload = client.directory_shortcuts()
-    session["remote_shortcuts"] = shortcut_payload["shortcuts"]
-    session["preferred_root"] = shortcut_payload["preferred_root"]
+    session_store.set_remote_shortcuts(
+        session,
+        shortcuts=shortcut_payload["shortcuts"],
+        preferred_root=shortcut_payload["preferred_root"],
+    )
     return shortcut_payload
 
 
@@ -115,7 +124,7 @@ def create_history_rollback_runner(session: dict[str, Any], entry: dict[str, Any
 
 def build_file_replace_history(session: dict[str, Any], remote_path: str, backup_path: str | None, result: dict[str, Any]) -> int:
     entry = {
-        "owner_id": str(session.get("session_id") or ""),
+        "owner_id": session_store.get_session_id(session),
         **robot_identity(session),
         "operation_type": "file_replace",
         "title": f"替换文件 {posixpath.basename(remote_path)}",

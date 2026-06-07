@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from backend.runtime.operations.services import current_robot_password
-from backend.runtime.workflow.confirmation import get_runtime_value, set_context_value
+from backend.runtime.workflow.confirmation import get_runtime_value, set_context_value, set_runtime_value
 from ..base import ToolRuntime, with_target_tool_runtime
 from ..remote import DeviceTypeArgs
 from .impl import (
@@ -39,13 +39,13 @@ def handle_prepare_artifact_sources(args: PrepareArtifactSourcesArgs, tool_conte
     result = prepare_artifact_sources(list(args.source_items or []), upload_token=normalized_upload_token)
     if isinstance(tool_context, dict):
         artifact_items = list(result.get("artifact_items") or [])
-        set_context_value(tool_context, "artifact_items", artifact_items)
-        set_context_value(tool_context, "package_files", list(result.get("package_files") or []))
+        set_runtime_value(tool_context, "artifact_items", artifact_items)
+        set_runtime_value(tool_context, "package_files", list(result.get("package_files") or []))
         if artifact_items:
             first_item = artifact_items[0] if isinstance(artifact_items[0], dict) else {}
-            set_context_value(tool_context, "file_name", str(first_item.get("file_name") or "").strip())
-            set_context_value(tool_context, "file_size", int(first_item.get("file_size") or 0))
-            set_context_value(tool_context, "local_tmp_path", str(first_item.get("local_tmp_path") or "").strip())
+            set_runtime_value(tool_context, "file_name", str(first_item.get("file_name") or "").strip())
+            set_runtime_value(tool_context, "file_size", int(first_item.get("file_size") or 0))
+            set_runtime_value(tool_context, "local_tmp_path", str(first_item.get("local_tmp_path") or "").strip())
             if isinstance(first_item.get("source_metadata"), dict):
                 set_context_value(tool_context, "source_metadata", first_item.get("source_metadata"))
     return {
@@ -82,7 +82,7 @@ def handle_remote_stage_artifacts(args: RemoteStageArtifactsArgs, tool_context: 
                 upload_progress_manager.fail(upload_token, f"上传失败: {exc}")
             raise
         if isinstance(tool_context, dict):
-            set_context_value(tool_context, "uploaded_file_paths", result.get("uploaded_file_paths") or [])
+            set_runtime_value(tool_context, "uploaded_file_paths", result.get("uploaded_file_paths") or [])
         return {**result, "device_type": str(target.get("device_type") or args.device_type).upper()}
 
     return with_target_tool_runtime(tool_context, device_type=args.device_type, handler=_handler)

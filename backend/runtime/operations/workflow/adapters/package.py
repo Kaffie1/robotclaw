@@ -3,8 +3,8 @@ from typing import Any
 
 from backend.core.models import TaskFailure
 from backend.runtime.tasks import TaskContext
-from backend.infra.container import upload_progress_manager
-from backend.runtime.workflow.confirmation import apply_confirmation_response, set_runtime_value
+from backend.infra.container import session_store, upload_progress_manager
+from backend.runtime.workflow.confirmation import apply_confirmation_response, get_runtime_value, set_runtime_value
 from backend.core.shared import (
     extract_critical_command_warnings,
     log_command_result,
@@ -38,7 +38,7 @@ def _append_stage_logs(ctx: TaskContext, stage_payload: dict[str, Any], source_m
 
 def _build_playbook_status_reporter(ctx: TaskContext, *, upload_token: str, tool_context: dict[str, Any]) -> Any:
     def progress_transformer(progress_info: dict[str, str], active_tool_context: dict[str, Any]) -> dict[str, str]:
-        raw_source_metadata = (active_tool_context or {}).get("source_metadata")
+        raw_source_metadata = get_runtime_value(active_tool_context, "source_metadata")
         source_metadata = raw_source_metadata if isinstance(raw_source_metadata, dict) else {}
         if progress_info["step_name"] == "prepare_package_source" and str(source_metadata.get("source_kind") or "").strip() == "file_server":
             progress_info["phase"] = "downloading_from_server"
@@ -48,7 +48,7 @@ def _build_playbook_status_reporter(ctx: TaskContext, *, upload_token: str, tool
         ctx,
         upload_token=upload_token,
         tool_context=tool_context,
-        total_bytes_getter=lambda active_tool_context: int((active_tool_context or {}).get("file_size") or 0) or None,
+        total_bytes_getter=lambda active_tool_context: int(get_runtime_value(active_tool_context, "file_size") or 0) or None,
         progress_transformer=progress_transformer,
         log_pending_confirmation=True,
     )
@@ -68,7 +68,7 @@ def _build_install_output_callback(
             return
         state["last_line"] = normalized_line
         ctx.log(f"[install] {normalized_line}")
-        total_bytes = int((tool_context or {}).get("file_size") or 0) or None
+        total_bytes = int(get_runtime_value(tool_context, "file_size") or 0) or None
         upload_progress_manager.update(
             upload_token,
             transferred_bytes=total_bytes,
@@ -151,6 +151,8 @@ def create_package_workflow_task_runner(
                 "upload_token": upload_token,
                 "source_metadata": resolved_source_metadata,
             }
+            set_runtime_value(workflow_context, "upload_token", upload_token)
+            set_runtime_value(workflow_context, "source_metadata", resolved_source_metadata)
             set_runtime_value(
                 workflow_context,
                 "install_output_callback",
@@ -235,8 +237,10 @@ def create_package_workflow_task_runner(
                     summary["temp_remote_path"] = resolved_stage_remote_path
                     history["remote_deb_path"] = resolved_stage_remote_path
                     history["target_path"] = resolved_stage_remote_path
-                    session["last_remote_deb_path"] = resolved_stage_remote_path
-                prepared_source_metadata = workflow_context.get("source_metadata") if isinstance(workflow_context.get("source_metadata"), dict) else resolved_source_metadata
+                    session_store.set_last_remote_deb_path(session, resolved_stage_remote_path)
+                prepared_source_metadata = get_runtime_value(workflow_context, "source_metadata")
+                if not isinstance(prepared_source_metadata, dict):
+                    prepared_source_metadata = resolved_source_metadata
                 summary["source_metadata"] = prepared_source_metadata
                 _append_stage_logs(ctx, stage_payload, prepared_source_metadata)
                 if not bool(stage_payload.get("upload_skipped")):

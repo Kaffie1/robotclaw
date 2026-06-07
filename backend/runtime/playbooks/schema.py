@@ -37,6 +37,27 @@ def _validate_context_key_exists(context_schema: dict[str, dict[str, Any]], key:
         raise ApiError(f"{field_name} 未在 context_schema 中声明: {playbook_id}.{path}.{normalized_key}")
 
 
+def _validate_context_key_source(
+    context_schema: dict[str, dict[str, Any]],
+    key: str,
+    *,
+    playbook_id: str,
+    path: str,
+    field_name: str,
+    allowed_sources: set[str],
+) -> None:
+    normalized_key = str(key or "").strip()
+    if not normalized_key or not context_schema:
+        return
+    spec = context_schema.get(normalized_key)
+    if not isinstance(spec, dict):
+        return
+    source = str(spec.get("source") or "runtime").strip().lower()
+    if source not in allowed_sources:
+        allowed_text = "/".join(sorted(allowed_sources))
+        raise ApiError(f"{field_name} 的上下文字段来源必须是 {allowed_text}: {playbook_id}.{path}.{normalized_key}")
+
+
 def _validate_context_references(value: Any, context_schema: dict[str, dict[str, Any]], *, playbook_id: str, path: str) -> None:
     if isinstance(value, dict):
         if "from_context" in value and len(value) == 1:
@@ -85,6 +106,14 @@ def _validate_confirmation_spec_with_context(
         raise ApiError(f"confirmation.output 必须是对象: {playbook_id}.{path}")
     store_as = str(output.get("store_as") or "").strip()
     _validate_context_key_exists(context_schema, store_as, playbook_id=playbook_id, path=path, field_name="confirmation.output.store_as")
+    _validate_context_key_source(
+        context_schema,
+        store_as,
+        playbook_id=playbook_id,
+        path=path,
+        field_name="confirmation.output.store_as",
+        allowed_sources={"confirmation"},
+    )
     if mode in {"input", "select"}:
         input_spec = confirmation.get("input")
         if not isinstance(input_spec, dict):
@@ -167,12 +196,21 @@ def validate_bt_node_spec(
             raise ApiError(f"行为树叶子节点 result_mapping 必须是对象: {playbook_id}.{path}")
         if isinstance(result_mapping, dict):
             for _, target_key in result_mapping.items():
+                normalized_target_key = str(target_key or "").strip()
                 _validate_context_key_exists(
                     normalized_context_schema,
-                    str(target_key or "").strip(),
+                    normalized_target_key,
                     playbook_id=playbook_id,
                     path=path,
                     field_name="result_mapping",
+                )
+                _validate_context_key_source(
+                    normalized_context_schema,
+                    normalized_target_key,
+                    playbook_id=playbook_id,
+                    path=path,
+                    field_name="result_mapping",
+                    allowed_sources={"runtime"},
                 )
         _validate_confirmation_spec_with_context(
             node,

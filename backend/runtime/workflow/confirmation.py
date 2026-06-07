@@ -15,6 +15,7 @@ _FALSE_TEXTS = {"0", "false", "no", "n", "cancel", "否", "拒绝", "不同意",
 MAX_CHAT_HISTORY_TURNS = 3
 PLAYBOOK_CONTEXT_KEY = "playbook_context"
 PLAYBOOK_CONTEXT_KEYS_KEY = "playbook_context_keys"
+PLAYBOOK_CONTEXT_SOURCES_KEY = "playbook_context_sources"
 RUNTIME_CONTEXT_KEY = "runtime_context"
 
 
@@ -95,28 +96,24 @@ def set_runtime_value(tool_context: dict[str, Any] | None, key: str, value: Any)
         return
     runtime_context = get_runtime_context(tool_context, create=True)
     runtime_context[normalized_key] = value
-    tool_context[normalized_key] = value
 
 
 def get_chat_state(tool_context: dict[str, Any] | None) -> dict[str, Any]:
     session = get_session(tool_context)
     if session is None:
         return {}
-    chat_state = session.get("chat_state")
-    if not isinstance(chat_state, dict):
-        chat_state = {}
-        session["chat_state"] = chat_state
-    return chat_state
+    from ...infra.container import session_store
+
+    return session_store.ensure_chat_state(session)
 
 
 def _get_chat_history_path(tool_context: dict[str, Any] | None) -> Path | None:
     session = get_session(tool_context)
     if session is None:
         return None
-    raw_path = str(session.get("chat_history_path") or "").strip()
-    if not raw_path:
-        return None
-    return Path(raw_path)
+    from ...infra.container import session_store
+
+    return session_store.get_chat_history_path(session)
 
 
 def _read_chat_history_file(tool_context: dict[str, Any] | None) -> list[dict[str, str]]:
@@ -261,6 +258,9 @@ def clear_playbook_input(tool_context: dict[str, Any] | None, key: str) -> None:
         playbook_context = tool_context.get(PLAYBOOK_CONTEXT_KEY)
         if isinstance(playbook_context, dict):
             playbook_context.pop(normalized_key, None)
+        runtime_context = tool_context.get(RUNTIME_CONTEXT_KEY)
+        if isinstance(runtime_context, dict):
+            runtime_context.pop(normalized_key, None)
         tool_context.pop(normalized_key, None)
 
 
@@ -370,22 +370,49 @@ def get_declared_playbook_context_keys(tool_context: dict[str, Any] | None) -> s
     return {str(item or "").strip() for item in raw_keys if str(item or "").strip()}
 
 
+def get_declared_playbook_context_sources(tool_context: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(tool_context, dict):
+        return {}
+    raw_sources = tool_context.get(PLAYBOOK_CONTEXT_SOURCES_KEY)
+    if not isinstance(raw_sources, dict):
+        return {}
+    normalized_sources: dict[str, str] = {}
+    for raw_key, raw_value in raw_sources.items():
+        normalized_key = str(raw_key or "").strip()
+        normalized_value = str(raw_value or "").strip().lower()
+        if normalized_key and normalized_value:
+            normalized_sources[normalized_key] = normalized_value
+    return normalized_sources
+
+
 def set_context_value(tool_context: dict[str, Any] | None, key: str, value: Any) -> None:
     normalized_key = str(key or "").strip()
     if not normalized_key or not isinstance(tool_context, dict):
         return
     playbook_context = get_playbook_context(tool_context, create=True)
     declared_keys = get_declared_playbook_context_keys(tool_context)
-    if playbook_context or normalized_key in declared_keys:
+    declared_sources = get_declared_playbook_context_sources(tool_context)
+    is_declared_key = normalized_key in declared_keys
+    declared_source = declared_sources.get(normalized_key)
+    if declared_source == "runtime":
+        set_runtime_value(tool_context, normalized_key, value)
+        return
+    if is_declared_key or (playbook_context and not declared_keys):
         playbook_context[normalized_key] = value
-    tool_context[normalized_key] = value
+    if not is_declared_key:
+        tool_context[normalized_key] = value
 
 
 def sync_playbook_context_view(tool_context: dict[str, Any] | None) -> None:
     if not isinstance(tool_context, dict):
         return
     playbook_context = get_playbook_context(tool_context)
+    declared_keys = get_declared_playbook_context_keys(tool_context)
+    for key in declared_keys:
+        tool_context.pop(key, None)
     for key, value in playbook_context.items():
+        if str(key or "").strip() in declared_keys:
+            continue
         tool_context[str(key)] = value
 
 
@@ -393,12 +420,20 @@ def sync_playbook_context_from_tool_context(tool_context: dict[str, Any] | None)
     if not isinstance(tool_context, dict):
         return
     declared_keys = get_declared_playbook_context_keys(tool_context)
+    declared_sources = get_declared_playbook_context_sources(tool_context)
     if not declared_keys:
         return
     playbook_context = get_playbook_context(tool_context, create=True)
     for key in declared_keys:
-        if key in tool_context:
-            playbook_context[key] = tool_context.get(key)
+        if declared_sources.get(key) == "runtime":
+            continue
+        if key not in tool_context:
+            continue
+        current_value = playbook_context.get(key)
+        if key in playbook_context and current_value is not None:
+            if not isinstance(current_value, str) or current_value.strip():
+                continue
+        playbook_context[key] = tool_context.get(key)
 
 
 def get_context_value(tool_context: dict[str, Any] | None, key: str) -> Any:
@@ -410,6 +445,9 @@ def get_context_value(tool_context: dict[str, Any] | None, key: str) -> Any:
     playbook_context = get_playbook_context(tool_context)
     if normalized_key in playbook_context:
         return playbook_context.get(normalized_key)
+    runtime_context = get_runtime_context(tool_context)
+    if normalized_key in runtime_context:
+        return runtime_context.get(normalized_key)
     return tool_context.get(normalized_key)
 
 
@@ -419,6 +457,10 @@ def get_nested_context_value(tool_context: dict[str, Any] | None, key: str) -> t
         return False, None
     playbook_context = get_playbook_context(tool_context)
     found, value = _get_value_by_path(playbook_context, normalized_key)
+    if found:
+        return True, value
+    runtime_context = get_runtime_context(tool_context)
+    found, value = _get_value_by_path(runtime_context, normalized_key)
     if found:
         return True, value
     return _get_value_by_path(tool_context or {}, normalized_key)

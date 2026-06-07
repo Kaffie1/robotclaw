@@ -7,10 +7,10 @@ from ...core.models import ApiError, ConnectPayload, ConnectionConfig
 from ...agent.shared.thread_context import clear_runtime_tool_contexts_for_session
 from ...runtime.operations.services import refresh_remote_shortcuts
 from ...core.validation import require_text
-from ...infra.container import connection_cache_store, deploy_config_store
+from ...infra.container import connection_cache_store, deploy_config_store, session_store
 from ...runtime.workflow.playbook_state import clear_live_playbook_state
 from ...runtime.workflow.confirmation import delete_chat_history_file, reset_chat_state
-from ..support import get_session, get_session_id, hydrate_session_last_config_from_cache
+from ..support import get_session, get_session_id, hydrate_session_last_config_from_cache, is_session_connected
 
 router = APIRouter()
 
@@ -19,17 +19,17 @@ router = APIRouter()
 def api_status(request: Request):
     session = get_session(request)
     hydrate_session_last_config_from_cache(session)
-    if session["client"].connected and not session.get("remote_shortcuts"):
+    if is_session_connected(request) and not session_store.get_remote_shortcuts(session):
         refresh_remote_shortcuts(session)
     return {
         "ok": True,
         "session_id": get_session_id(request),
         "app_edition": APP_EDITION,
-        "connected": session["client"].connected,
-        "last_config": session["last_config"],
-        "last_remote_deb_path": session["last_remote_deb_path"],
-        "remote_shortcuts": session.get("remote_shortcuts", []),
-        "preferred_root": session.get("preferred_root", "/"),
+        "connected": is_session_connected(request),
+        "last_config": session_store.get_last_config(session),
+        "last_remote_deb_path": session_store.get_last_remote_deb_path(session),
+        "remote_shortcuts": session_store.get_remote_shortcuts(session),
+        "preferred_root": session_store.get_preferred_root(session),
         "saved_connections": connection_cache_store.list_entries(),
         "package_machine_options": deploy_config_store.get_machine_options("package"),
         "module_machine_options": deploy_config_store.get_machine_options("module"),
@@ -53,20 +53,21 @@ def api_connect(payload: ConnectPayload, request: Request):
         raise ApiError("请填写密码")
     config = ConnectionConfig(host=host, port=int(payload.port), username=username, password=password)
     if APP_EDITION != "robot":
-        session["client"].connect(config)
-    session["last_config"] = {
+        session_store.get_client(session).connect(config)
+    session_store.set_last_config(session, {
         "host": host,
         "port": int(payload.port),
         "username": username,
         "pico_host": pico_host,
         "pico_port": int(payload.pico_port),
         "pico_username": pico_username,
-    }
-    session["ssh_auth"] = {"username": username, "password": password}
-    session["processor_auth"] = {
-        "ORIN": {"host": host, "port": int(payload.port), "username": username, "password": password},
-        "PICO": {"host": pico_host, "port": int(payload.pico_port), "username": pico_username, "password": pico_password},
-    }
+    })
+    session_store.set_ssh_auth(session, username=username, password=password)
+    session_store.set_processor_auth(
+        session,
+        orin={"host": host, "port": int(payload.port), "username": username, "password": password},
+        pico={"host": pico_host, "port": int(payload.pico_port), "username": pico_username, "password": pico_password},
+    )
     saved_connections = connection_cache_store.remember(
         {
             "host": host,
@@ -94,29 +95,34 @@ def api_connect(payload: ConnectPayload, request: Request):
 def api_disconnect(request: Request):
     session = get_session(request)
     session_id = get_session_id(request)
-    session["client"].close()
-    session["remote_shortcuts"] = []
-    session["preferred_root"] = "/"
+    session_store.get_client(session).close()
+    session_store.clear_remote_shortcuts(session)
     tool_context = {"session_id": session_id}
     reset_chat_state(tool_context)
     delete_chat_history_file(tool_context)
     clear_live_playbook_state(session_id=session_id)
     clear_runtime_tool_contexts_for_session(session_id)
-    session["ssh_auth"] = {"username": str(session["last_config"].get("username") or ""), "password": ""}
-    session["processor_auth"] = {
-        "ORIN": {
-            "host": str(session["last_config"].get("host") or ""),
-            "port": int(session["last_config"].get("port") or 22),
-            "username": str(session["last_config"].get("username") or ""),
+    last_config = session_store.get_last_config(session)
+    session_store.set_ssh_auth(
+        session,
+        username=str(last_config.get("username") or ""),
+        password="",
+    )
+    session_store.set_processor_auth(
+        session,
+        orin={
+            "host": str(last_config.get("host") or ""),
+            "port": int(last_config.get("port") or 22),
+            "username": str(last_config.get("username") or ""),
             "password": "",
         },
-        "PICO": {
-            "host": str(session["last_config"].get("pico_host") or ""),
-            "port": int(session["last_config"].get("pico_port") or 22),
-            "username": str(session["last_config"].get("pico_username") or ""),
+        pico={
+            "host": str(last_config.get("pico_host") or ""),
+            "port": int(last_config.get("pico_port") or 22),
+            "username": str(last_config.get("pico_username") or ""),
             "password": "",
         },
-    }
+    )
     return {"ok": True, "message": "已断开连接"}
 
 

@@ -6,12 +6,12 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from ...core.models import ExecutePayload, ToolCallPayload, ApiError
-from ...runtime.operations.services import build_file_replace_history, current_robot_password, ensure_client_connected
+from ...runtime.operations.services import build_file_replace_history, current_robot_password
 from ...runtime.operations.workflow import create_package_target_client
 from ...core.validation import parse_bool, require_text, require_upload
 from ...infra.container import upload_progress_manager
 from ...runtime.tools import tool_registry
-from ..support import build_log_archive_name, collect_log_files, get_session, get_session_id
+from ..support import build_log_archive_name, collect_log_files, get_connected_session_client, get_session, get_session_id
 
 router = APIRouter()
 
@@ -135,7 +135,7 @@ def api_replace_file(
 ):
     session = get_session(request)
     session_id = get_session_id(request)
-    client = ensure_client_connected(session)
+    client = get_connected_session_client(request)
     upload = require_upload(replace_file, "请上传要替换的本地文件")
     target_path = client.resolve_remote_path(require_text(remote_path, "目标远程文件不能为空"))
     raw_bytes = upload.file.read()

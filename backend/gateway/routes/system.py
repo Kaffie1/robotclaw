@@ -1,15 +1,14 @@
 from fastapi import APIRouter, Request
 
-from ..support import get_session, get_session_id
+from ..support import get_session_id, is_session_connected
 
 router = APIRouter()
 
 
 @router.get("/api/ping")
 def api_ping(request: Request):
-    session = get_session(request)
     return {
         "ok": True,
         "session_id": get_session_id(request),
-        "connected": bool(session["client"].connected),
+        "connected": is_session_connected(request),
     }
