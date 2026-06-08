@@ -25,9 +25,9 @@ def check_robot_node(state: dict) -> dict:
     short_memory.current_node = "robot_check"
     runtime_state.trace.append(
         RouteDecision(
-            stage="机器人检查",
+            stage="工具执行",
             summary=_tool_execution_summary(runtime_state.tool_results),
-            detail="；".join(item.summary for item in runtime_state.tool_results) or "暂无检查结果",
+            detail="；".join(item.summary for item in runtime_state.tool_results) or "暂无执行结果",
         )
     )
     diagnosis.evidence.extend(
@@ -43,7 +43,7 @@ def check_robot_node(state: dict) -> dict:
 
 def _tool_execution_summary(results: list[ToolExecutionResult]) -> str:
     if not results:
-        return "当前没有执行机器人检查"
+        return "当前没有执行任何工具动作"
     completed = sum(1 for item in results if item.status == "completed")
     blocked = sum(1 for item in results if item.status != "completed")
-    return f"已完成 {completed} 个检查动作，阻塞 {blocked} 个动作"
+    return f"已完成 {completed} 个工具动作，阻塞 {blocked} 个动作"

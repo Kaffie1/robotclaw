@@ -1,7 +1,3 @@
-from __future__ import annotations
+from backend.langgraph.nodes.knowledge import retrieve_knowledge, retrieve_knowledge_node
 
-from backend.knowledge import KnowledgeService
-
-
-def retrieve_knowledge(knowledge_service: KnowledgeService, topic: str) -> dict[str, str | float]:
-    return knowledge_service.retrieve(topic)
+__all__ = ["retrieve_knowledge", "retrieve_knowledge_node"]

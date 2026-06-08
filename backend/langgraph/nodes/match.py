@@ -22,6 +22,7 @@ def match_playbook_node(state: dict) -> dict:
     runtime_state.playbook_execution.status = "matched" if runtime_state.matched_playbook_id else "fallback"
     runtime_state.route = select_route(matched_playbook_id=runtime_state.matched_playbook_id, request=request)
     short_memory.scratchpad["route_prompt"] = state["build_route_prompt"](request.content)
+    short_memory.scratchpad["playbook"] = playbook
     runtime_state.trace.append(
         RouteDecision(
             stage="Playbook 匹配",

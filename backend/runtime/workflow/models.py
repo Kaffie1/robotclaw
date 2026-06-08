@@ -12,6 +12,8 @@ class ConfirmationRequest:
     node_path: str
     message: str
     options: list[str] = field(default_factory=list)
+    resume_from_step: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

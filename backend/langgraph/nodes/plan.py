@@ -6,8 +6,8 @@ from backend.tools.models import PlannedToolCall
 from backend.runtime.models import RouteDecision
 
 
-def plan_tools(tool_executor: ToolExecutor, category: str, connected: bool) -> list[PlannedToolCall]:
-    return tool_executor.plan(category, connected)
+def plan_tools(tool_executor: ToolExecutor, suggested_tools: list[str], connected: bool) -> list[PlannedToolCall]:
+    return tool_executor.plan(suggested_tools, connected)
 
 
 def summarize_tool_plan(planned_tools: list[PlannedToolCall]) -> str:
@@ -24,21 +24,52 @@ def plan_tools_node(state: dict) -> dict:
     short_memory = state["short_memory"]
     intent = state["intent"]
     request = state["request"]
+    response_mode = str(state.get("response_mode") or short_memory.scratchpad.get("response_mode") or "").strip().lower()
+    knowledge = state.get("knowledge") or short_memory.scratchpad.get("knowledge") or {}
+    history_text = _format_history(state.get("conversation_history") or [])
 
     runtime_state.current_step = "tool_planning"
-    prompt = state["build_planner_prompt"](request.content, runtime_state.route)
+    prompt = state["build_planner_prompt"](
+        request.content,
+        runtime_state.route,
+        knowledge_context=str(knowledge.get("context", "") or ""),
+        response_mode=response_mode or "answer",
+        history_text=history_text,
+    )
     short_memory.scratchpad["planner_prompt"] = prompt
-    runtime_state.planned_tools = plan_tools(state["tool_executor"], intent["category"], state["connected"])
+    short_memory.scratchpad["intent"] = intent
+    short_memory.scratchpad["plan_llm_attempted"] = False
+    short_memory.scratchpad["plan_source"] = "fallback"
+    runtime_state.planned_tools = []
+    if response_mode == "answer":
+        runtime_state.trace.append(
+            RouteDecision(
+                stage="工具规划",
+                summary="当前处于知识直答模式，无需工具调用",
+                detail="response_mode=answer",
+            )
+        )
+        return {
+            "runtime_state": runtime_state,
+            "short_memory": short_memory,
+            "response_mode": response_mode,
+        }
     try:
-        response = state["llm_client"].invoke_schema(
+        short_memory.scratchpad["plan_llm_attempted"] = True
+        response = state["get_llm_client"]().invoke_schema(
             prompt=prompt,
             schema_parser=parse_tool_plan_output,
             metadata={"node": "plan"},
         )
-        planned_from_llm = plan_tools(state["tool_executor"], response.parsed["category"], state["connected"])
+        short_memory.scratchpad["planner_result"] = response.parsed
+        short_memory.scratchpad["plan_source"] = "llm"
+        planned_from_llm = plan_tools(
+            state["tool_executor"],
+            [item["tool_name"] for item in response.parsed["tools"]],
+            state["connected"],
+        )
         if planned_from_llm:
             runtime_state.planned_tools = planned_from_llm
-            short_memory.scratchpad["planner_result"] = response.parsed
     except Exception:
         pass
     runtime_state.trace.append(
@@ -51,4 +82,17 @@ def plan_tools_node(state: dict) -> dict:
     return {
         "runtime_state": runtime_state,
         "short_memory": short_memory,
+        "response_mode": response_mode,
     }
+
+
+def _format_history(history: list[dict]) -> str:
+    lines: list[str] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "") or "").strip()
+        content = str(item.get("content", "") or "").strip()
+        if role and content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)

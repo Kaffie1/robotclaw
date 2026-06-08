@@ -1,46 +1,57 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Protocol
 
 from backend.llm.config import LLMConfig, load_llm_config
 from backend.llm.models import LLMMessage, LLMRequest, LLMResponse, StructuredLLMResponse
 from backend.llm.parser import extract_json_object, to_payload
+from backend.shared.config import OPENAI_ENABLE_REASONING_SPLIT, OPENAI_THINK
+from backend.shared import get_logger
+
+
+logger = get_logger("llm.client")
 
 
 class LLMBackend(Protocol):
     def invoke(self, request: LLMRequest) -> LLMResponse: ...
 
 
-class MockLLMBackend:
-    def invoke(self, request: LLMRequest) -> LLMResponse:
-        last_message = request.messages[-1].content if request.messages else ""
-        content = self._build_mock_response(last_message)
-        return LLMResponse(
-            model=request.model,
-            content=content,
-            finish_reason="stop",
-            raw={"provider": "mock"},
-        )
+class ChatOpenAIBackend:
+    def __init__(self, config: LLMConfig) -> None:
+        self.config = config
 
-    def _build_mock_response(self, prompt: str) -> str:
-        normalized = prompt.strip()
-        if "总结" in normalized or "summary" in normalized.lower():
-            return '{"summary":"已根据当前证据生成诊断总结。","evidence":["已完成问题理解","已完成基础工具规划"],"next_steps":["继续连接机器人并采集事实"]}'
-        if "route" in normalized.lower() or "playbook" in normalized.lower():
-            if any(keyword in normalized for keyword in ("雷达", "scan", "lidar")):
-                return '{"route":"playbook","reason":"问题包含雷达关键词，优先走经验流程。","matched_playbook_id":"lidar-no-data"}'
-            return '{"route":"knowledge","reason":"未命中固定经验流程，进入知识检索路径。","matched_playbook_id":""}'
-        if "分类" in normalized or "category" in normalized.lower():
-            if any(keyword in normalized for keyword in ("雷达", "scan", "lidar")):
-                return '{"category":"lidar","summary":"识别为传感器/雷达异常问题","detail":"问题包含雷达或扫描数据关键词。"}'
-            if any(keyword in normalized for keyword in ("定位", "漂移", "localization", "amcl")):
-                return '{"category":"localization","summary":"识别为定位异常问题","detail":"问题与定位缺失、漂移或定位质量下降相关。"}'
-            if any(keyword in normalized for keyword in ("地图", "map", "加载失败")):
-                return '{"category":"mapping","summary":"识别为地图/建图相关问题","detail":"问题包含地图加载或地图服务相关描述。"}'
-            return '{"category":"general","summary":"识别为通用运维问答","detail":"当前先走通用聊天诊断链路。"}'
-        if "tool" in normalized.lower() or "规划" in normalized:
-            return '{"category":"general","tools":[{"tool_name":"check_nodes","reason":"先确认机器人节点运行状态"}],"summary":"先采集运行态事实"}'
-        return '{"summary":"已生成默认总结。","evidence":[],"next_steps":["继续连接机器人并采集事实"]}'
+    def invoke(self, request_payload: LLMRequest) -> LLMResponse:
+        api_base = (self.config.api_base or "").rstrip("/")
+        if not api_base:
+            raise ValueError("openai provider 缺少 api_base 配置")
+        if not self.config.api_key:
+            raise ValueError("openai provider 缺少 api_key 配置")
+
+        try:
+            from langchain_openai import ChatOpenAI
+        except Exception as exc:
+            raise RuntimeError("聊天依赖未安装，请先安装 langchain-openai 和 openai") from exc
+
+        llm = ChatOpenAI(
+            model=request_payload.model,
+            api_key=self.config.api_key,
+            base_url=api_base,
+            temperature=request_payload.temperature,
+            max_tokens=request_payload.max_tokens,
+            timeout=self.config.timeout_seconds,
+            extra_body=_build_extra_body(),
+        )
+        response = llm.invoke(_to_langchain_messages(request_payload.messages))
+        message = _extract_langchain_message_content(response.content)
+        finish_reason = str(getattr(response, "response_metadata", {}).get("finish_reason", "stop") or "stop")
+        return LLMResponse(
+            model=str(getattr(response, "response_metadata", {}).get("model_name", "") or request_payload.model),
+            content=message,
+            finish_reason=finish_reason,
+            raw=_build_raw_payload(response),
+        )
 
 
 class LLMClient:
@@ -57,14 +68,43 @@ class LLMClient:
         max_tokens: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> LLMResponse:
-        request = LLMRequest(
+        llm_request = LLMRequest(
             messages=messages,
             model=model or self.config.model,
             temperature=self.config.temperature if temperature is None else temperature,
             max_tokens=self.config.max_tokens if max_tokens is None else max_tokens,
             metadata=dict(metadata or {}),
         )
-        return self.backend.invoke(request)
+        logger.info(
+            "LLM invoke input provider=%s profile_id=%s model=%s temperature=%s max_tokens=%s metadata=%s messages=%s",
+            self.config.provider,
+            self.config.profile_id,
+            llm_request.model,
+            llm_request.temperature,
+            llm_request.max_tokens,
+            llm_request.metadata,
+            _summarize_messages(llm_request.messages),
+        )
+        try:
+            response = self.backend.invoke(llm_request)
+        except Exception:
+            logger.exception(
+                "LLM invoke failed provider=%s profile_id=%s model=%s metadata=%s",
+                self.config.provider,
+                self.config.profile_id,
+                llm_request.model,
+                llm_request.metadata,
+            )
+            raise
+        logger.info(
+            "LLM invoke output provider=%s profile_id=%s model=%s finish_reason=%s content=%s",
+            self.config.provider,
+            self.config.profile_id,
+            response.model,
+            response.finish_reason,
+            _clip_text(response.content),
+        )
+        return response
 
     def invoke_text(
         self,
@@ -90,6 +130,11 @@ class LLMClient:
     ) -> StructuredLLMResponse:
         response = self.invoke_text(prompt=prompt, system_prompt=system_prompt, model=model, metadata=metadata)
         payload = extract_json_object(response.content)
+        logger.info(
+            "LLM structured output model=%s parsed_keys=%s",
+            response.model,
+            sorted(payload.keys()),
+        )
         return StructuredLLMResponse(
             model=response.model,
             content=response.content,
@@ -114,6 +159,11 @@ class LLMClient:
             metadata=metadata,
         )
         parsed = schema_parser(response.parsed)
+        logger.info(
+            "LLM schema output model=%s parsed=%s",
+            response.model,
+            _clip_text(json.dumps(to_payload(parsed), ensure_ascii=False)),
+        )
         return StructuredLLMResponse(
             model=response.model,
             content=response.content,
@@ -123,6 +173,80 @@ class LLMClient:
         )
 
     def _build_backend(self, config: LLMConfig) -> LLMBackend:
-        if config.provider == "mock":
-            return MockLLMBackend()
-        return MockLLMBackend()
+        if config.provider in {"openai", "openai_compatible"}:
+            return ChatOpenAIBackend(config)
+        raise ValueError(f"不支持的 LLM provider: {config.provider}")
+
+
+def _to_langchain_messages(messages: list[LLMMessage]) -> list[Any]:
+    try:
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+    except Exception as exc:
+        raise RuntimeError("聊天依赖未安装，请先安装 langchain-openai 和 openai") from exc
+
+    converted: list[Any] = []
+    for message in messages:
+        if message.role == "system":
+            converted.append(SystemMessage(content=message.content))
+        elif message.role == "assistant":
+            converted.append(AIMessage(content=message.content))
+        else:
+            converted.append(HumanMessage(content=message.content))
+    return converted
+
+
+def _extract_langchain_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return _strip_think_blocks(content)
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                texts.append(str(item.get("text", "")))
+            elif isinstance(item, str):
+                texts.append(item)
+        merged = "".join(texts).strip()
+        if merged:
+            return _strip_think_blocks(merged)
+    raise ValueError("LLM 返回缺少 message.content")
+
+
+def _build_raw_payload(response: Any) -> dict[str, Any]:
+    response_metadata = getattr(response, "response_metadata", {}) or {}
+    usage_metadata = getattr(response, "usage_metadata", {}) or {}
+    return {
+        "content": response.content,
+        "response_metadata": response_metadata,
+        "usage_metadata": usage_metadata,
+        "id": getattr(response, "id", ""),
+    }
+
+
+def _build_extra_body() -> dict[str, Any]:
+    return {
+        "reasoning_split": OPENAI_ENABLE_REASONING_SPLIT,
+        "think": OPENAI_THINK,
+    }
+
+
+def _clip_text(text: str, limit: int = 240) -> str:
+    normalized = " ".join((text or "").split()).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + "..."
+
+
+def _strip_think_blocks(text: str) -> str:
+    normalized = text or ""
+    cleaned = re.sub(r"<think>.*?</think>", "", normalized, flags=re.DOTALL | re.IGNORECASE).strip()
+    return cleaned or normalized.strip()
+
+
+def _summarize_messages(messages: list[LLMMessage]) -> list[dict[str, str]]:
+    return [
+        {
+            "role": message.role,
+            "content": _clip_text(message.content, limit=160),
+        }
+        for message in messages
+    ]

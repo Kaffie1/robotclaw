@@ -326,6 +326,22 @@ SSHManager
 - `LongMemory` 面向跨会话的经验沉淀
 - `MemoryManager` 负责统一路由，不建议让 Runtime 直接操作底层三类 memory 实现
 
+当前编排层接入约定：
+
+- `session_memory.chat_history` 负责保存会话级对话历史
+- `langgraph/builder.py` 在构图状态时提取最近几轮历史，生成 `conversation_history`
+- `conversation_history` 作为 Prompt 上下文提供给 `classify`、`build_messages`、`summarize` 等节点
+- `short_memory.scratchpad` 负责保存单任务中间结果，如 `intent`、`playbook`、`knowledge`、`analysis`、`llm_messages`
+- 当前阶段已实现“最近对话历史注入 Prompt”，但尚未完全实现长期记忆驱动的多轮规划
+
+当前实现状态：
+
+- 已落地：会话历史保存
+- 已落地：最近几轮历史注入 `classify` / `build_messages` / `summarize` Prompt
+- 已落地：`short_memory.scratchpad` 作为单任务中间结果缓存
+- 已落地：`build_messages -> call_model -> interpret_output` 对话闭环
+- 未完全落地：基于长期记忆的跨会话检索
+
 ### 4.4 Runtime
 
 `Runtime` 不负责图编排，负责诊断任务的运行承载与执行协作。
@@ -373,15 +389,100 @@ SSHManager
 - 节点调度
 - 图构建
 
+当前实现策略：
+
+- 保留新结构中的 `gateway`、`runtime`、`session`、`memory`、`workflow` 作为运行时外壳
+- 保留新的 HTTP 协议、任务状态、恢复令牌、事件广播与前端接口
+- `backend/langgraph/` 这一层尽量向 `old/backend/agent/graph/` 的节点拆分与边结构靠拢
+- 不再在新图中发明一套与 old 明显不同的“简化版诊断链路”
+- 迁移时优先复用 old 已验证的编排思路，再由新 Runtime 提供运行时上下文与外围能力
+
+设计目标：
+
+- 外层运行时继续使用新架构
+- 内层诊断编排尽量复用 old 的成熟图结构
+- 将“运行控制”和“诊断编排”清晰分层，避免逻辑再次回流到 `runtime/service.py`
+
 运行时节点建议拆分为：
 
 - `classify`
 - `match`
 - `knowledge`
-- `plan`
+- `build_messages`
+- `call_model`
+- `interpret`
 - `execute`
-- `analyze`
-- `summarize`
+- `confirm`
+
+知识检索路径采用 old 方案的显式多节点设计，而不是把多路检索封装进单一 service 黑盒中。
+
+推荐节点链路：
+
+- `classify_query`
+- `match_playbook`
+- `playbook_execution`
+- `load_knowledge_source_docs`
+- `retrieve_knowledge_faq`
+- `retrieve_knowledge_bm25`
+- `retrieve_knowledge_vector`
+- `merge_knowledge_retrieval`
+- `assemble_knowledge_context`
+- `decide_knowledge_response_mode`
+- `build_messages`
+- `call_model`
+- `interpret_output`
+- `call_tools`
+- `await_confirmation`
+
+其中知识库路径的关键约束为：
+
+- `knowledge route` 不等于“只做一次知识 service 调用”
+- FAQ、BM25、Vector 三路检索必须在 LangGraph 图中有独立节点
+- 多路结果必须显式 merge，而不是只保留单一路径结果
+- merge 后必须显式生成 `knowledge_context`、`citations`、`confidence` 等中间结果
+- `assemble_knowledge_context` 负责把知识证据整理成后续节点可消费的结构，而不是在 `summarize` 节点里临时拼接
+- `decide_knowledge_response_mode` 负责明确区分知识直答模式与动作/排查模式，而不是把两类路径混在一个总结节点里
+- `vector` 节点必须接入 embedding + 本地 `vectorstore/index.json`
+- 如果向量检索失败，允许降级到 FAQ / BM25，但不能把向量检索链路从图中拿掉
+
+当前图内的知识路径约定如下：
+
+```text
+match_playbook
+  ↓
+knowledge route
+  ↓
+load_knowledge_source_docs
+  ├─ retrieve_knowledge_faq
+  ├─ retrieve_knowledge_bm25
+  └─ retrieve_knowledge_vector
+  ↓
+merge_knowledge_retrieval
+  ↓
+assemble_knowledge_context
+  ↓
+decide_knowledge_response_mode
+  ↓
+build_messages
+  ↓
+call_model
+  ↓
+interpret_output
+  ├─ final / clarify -> finish
+  ├─ retry -> call_model
+  └─ tool_call -> call_tools -> call_model
+```
+
+`decide_knowledge_response_mode` 的设计约定：
+
+- `answer`：当前信息足够，进入知识直答模式，模型直接输出最终文本答案
+- `act`：仍需依赖工具、运行时状态或机器人环境，模型按协议输出 `command / clarify / final`
+
+在图路由上：
+
+- `response_mode=answer` 时，`build_messages` 会切换到知识直答系统提示词，禁止输出工具命令
+- `response_mode=act` 时，`build_messages` 会切换到故障排查系统提示词，允许模型通过 `command` 进入工具回灌循环
+- 当模型输出的工具需要先连接机器人时，`call_tools` 会转入 `await_confirmation`，并依旧复用新 Runtime 的恢复令牌与确认机制
 
 约定：
 
@@ -393,6 +494,176 @@ SSHManager
 - `langgraph/router.py` 负责条件分支判断
 
 同时将 `prompts` 放入 `langgraph/` 目录下，作为编排层的配套模块，为 LangGraph 节点提供统一 Prompt 构造能力，而不是把 Prompt 文本散落在节点实现内部。
+
+当前实现状态：
+
+- 已落地：知识检索三路节点 `FAQ / BM25 / Vector`
+- 已落地：`assemble_knowledge_context`
+- 已落地：`decide_knowledge_response_mode`
+- 已落地：`build_messages -> call_model -> interpret_output -> call_tools -> call_model` 主循环
+- 已落地：`response_mode=answer` 时切换到知识直答协议，直接输出最终文本
+- 已落地：图执行失败时保留 fallback 顺序执行
+- 已落地：工具调用前的人工确认仍复用新 Runtime / Workflow 外壳
+
+### 4.5.1 LangGraph State
+
+`backend/langgraph/state.py` 中的 `ChatGraphState` 是当前 LangGraph 图运行时的共享状态容器。
+
+设计原则：
+
+- `ChatGraphState` 负责承载“图内节点之间需要共享的运行上下文”
+- 业务长期状态仍由 `SessionState`、`TaskState`、`RuntimeState`、`ShortMemory` 分层承载
+- `ChatGraphState` 更像“本轮图执行视图”，不是持久化主模型
+- 能放引用就尽量放引用，避免把所有业务对象拍平成大字典
+
+当前字段建议按下面几组理解。
+
+1. 请求与运行入口
+
+```python
+class ChatGraphState(TypedDict, total=False):
+    request: ChatRequest  # 当前用户请求，请求正文、request_id、resume 标记等入口信息
+    envelope: RuntimeEnvelope  # 运行时总封装，包含 session、task、diagnosis、robot_config
+    runtime_state: RuntimeState  # 当前任务的运行控制面状态，如 current_step、finished、resume_from_step
+    diagnosis: DiagnosisSummary  # 当前任务的诊断输出对象，最终答案、证据、建议会写入这里
+    connected: bool  # 当前是否已满足机器人连接条件
+```
+
+说明：
+
+- `request` 是图的直接输入
+- `runtime_state` 是图执行过程真正会持续读写的控制面状态
+- `diagnosis` 是图最终给外部返回的结果对象
+
+2. 能力依赖与服务引用
+
+```python
+class ChatGraphState(TypedDict, total=False):
+    playbook_engine: PlaybookEngine  # Playbook 匹配与分析能力
+    knowledge_service: KnowledgeService  # 知识检索服务入口
+    get_llm_client: Any  # 获取当前激活 LLMClient 的工厂函数，便于热切模型
+    tool_executor: ToolExecutor  # 工具规划与执行入口
+    memory_manager: MemoryManager  # Memory 访问入口
+    workflow_store: WorkflowStore  # Workflow 状态持久化入口
+    event_bus: WorkflowEventBus  # Workflow 事件广播入口
+```
+
+说明：
+
+- 这些字段本质是“图执行依赖注入”
+- 不建议节点自己重新实例化这些能力对象
+- `get_llm_client` 使用工厂函数而不是直接塞实例，是为了兼容 profile 热更新
+
+3. Memory 与 Prompt 依赖
+
+```python
+class ChatGraphState(TypedDict, total=False):
+    short_memory: ShortMemory  # 单任务短期记忆，保存 scratchpad、tool_results、pending_confirmation
+    build_classify_prompt: Any  # classify 节点 Prompt 构造器
+    build_route_prompt: Any  # route / match 相关 Prompt 构造器
+    build_planner_prompt: Any  # planner Prompt 构造器，当前更多用于兼容过渡期
+    build_summary_prompt: Any  # summary Prompt 构造器
+    conversation_history: list[dict[str, str]]  # 最近几轮会话历史，供多轮承接理解
+```
+
+说明：
+
+- `short_memory` 承担本轮任务级 scratchpad，不把临时中间结果直接塞进 `RuntimeState`
+- `conversation_history` 是这次多轮衔接修复的关键字段
+- Prompt builder 放进 state 后，节点层就只关心“何时调用”，不关心 Prompt 文本放在哪
+
+4. 理解、路由与知识检索中间态
+
+```python
+class ChatGraphState(TypedDict, total=False):
+    intent: dict[str, Any]  # classify 结果，如 category / summary / detail
+    playbook: dict[str, Any]  # playbook 匹配结果
+    knowledge_source_docs: list[Any]  # 知识源文档全集或候选集
+    knowledge_faq_docs: list[Any]  # FAQ 检索结果
+    knowledge_bm25_docs: list[Any]  # BM25 检索结果
+    knowledge_vector_docs: list[Any]  # Vector 检索结果
+    knowledge_merged_docs: list[Any]  # 多路 merge 后的候选证据
+    knowledge: dict[str, Any]  # 最终整理后的知识上下文、citations、confidence 等
+    response_mode: str  # 知识响应模式，典型值为 answer / act
+    analysis: dict[str, Any]  # 诊断分析结果或阶段性结论
+```
+
+说明：
+
+- 这一组字段让知识路径不再是黑盒 service
+- `knowledge_*` 字段保留多路检索的显式过程态，便于日志、调试和 rerank 扩展
+- `response_mode` 是后续系统提示词切换和输出协议切换的关键开关
+
+5. 模型循环过程态
+
+```python
+class ChatGraphState(TypedDict, total=False):
+    messages: list[LLMMessage]  # 当前喂给模型的完整消息链
+    response_content: str  # 最近一次模型返回的原始文本
+    model_loop_count: int  # 当前主循环已调用模型的次数，用于防止死循环
+    parsed_response: dict[str, Any]  # interpret_output 解析出的结构化结果
+    pending_commands: list[dict[str, Any]]  # 等待执行的工具命令列表
+    result_kind: str  # 当前解析结论，如 final / clarify / retry / tool_call / confirmation
+    final_message: str  # 当前轮已经生成的最终答复文本
+```
+
+说明：
+
+- 这是这次从 `old` 迁过来的核心状态组
+- `messages` 是 `build_messages -> call_model -> interpret_output -> call_tools -> call_model` 能闭环的关键
+- `result_kind` 负责驱动图路由，不建议节点之间用布尔标志散乱判断
+- `model_loop_count` 用来限制错误输出导致的无限重试
+
+6. 确认与中断恢复态
+
+```python
+class ChatGraphState(TypedDict, total=False):
+    confirmation_request: ConfirmationRequest  # 当前待用户确认的挂起请求
+```
+
+说明：
+
+- `confirmation_request` 是 LangGraph 图与 Runtime Workflow 外壳的连接点
+- 需要人工确认时，图内会生成它，但真正的挂起、持久化和恢复仍由 `workflow_store`、`event_bus`、`RuntimeState.resume_from_step` 完成
+
+补充约定：
+
+- `ChatGraphState` 可以保存节点中间结果，但不应替代 `ShortMemory`
+- 原始 Prompt 文本、原始工具回包、超大知识文档对象不建议长期堆积在 state 中
+- 若某字段只是单节点局部临时变量，应尽量保留在节点内部，而不是扩散到全局 state
+- 文档中的字段分组应与 [backend/langgraph/state.py](/Users/wanghusen/Desktop/code/robot-control/backend/langgraph/state.py) 保持同步，后续新增字段时应先判断属于哪一组
+
+当前代码对应关系：
+
+- 图结构定义在 [backend/langgraph/builder.py](/Users/wanghusen/Desktop/code/robot-control/backend/langgraph/builder.py)
+- 条件路由定义在 [backend/langgraph/router.py](/Users/wanghusen/Desktop/code/robot-control/backend/langgraph/router.py)
+- 共享状态定义在 [backend/langgraph/state.py](/Users/wanghusen/Desktop/code/robot-control/backend/langgraph/state.py)
+- 回答主循环节点在 [backend/langgraph/nodes/answer.py](/Users/wanghusen/Desktop/code/robot-control/backend/langgraph/nodes/answer.py)
+
+#### State Boundary Cheat Sheet
+
+为了避免后续继续把运行状态、图状态和临时 scratchpad 混在一起，建议按下面这个边界理解：
+
+| 状态对象 | 主要职责 | 适合存放 | 不适合存放 |
+| --- | --- | --- | --- |
+| `RuntimeState` | Runtime 与 LangGraph 共享的控制面状态 | `current_step`、`finished`、`resume_from_step`、`planned_tools`、`trace`、`tool_results` | 原始 Prompt、完整消息链、大段知识上下文、局部临时变量 |
+| `ShortMemory` | 单任务短期记忆与 scratchpad | `intent`、`playbook`、`knowledge`、`analysis`、`llm_messages`、`pending_confirmation` | 跨会话历史、长期经验、需要对外直接返回的正式结果 |
+| `ChatGraphState` | 单次图执行期间的共享视图 | 运行依赖注入、节点中间态引用、模型循环态、最近几轮 `conversation_history` | 持久化主模型、全量业务数据库对象、与图无关的外围状态 |
+
+进一步约定：
+
+- `RuntimeState` 关注“流程现在走到哪、是否结束、从哪恢复”
+- `ShortMemory` 关注“本轮任务临时记住了什么”
+- `ChatGraphState` 关注“这次图执行需要把哪些东西串起来”
+
+判断一个字段该放哪，可以用这三个问题快速区分：
+
+1. 这个字段是否需要跨中断恢复继续生效，而且属于流程控制语义？
+   如果是，优先放 `RuntimeState`
+2. 这个字段是否只是本轮任务中间结果，后续节点要读，但不适合放控制面？
+   如果是，优先放 `ShortMemory`
+3. 这个字段是否只是为了让当前图节点拿到依赖或共享一次运行视图？
+   如果是，优先放 `ChatGraphState`
 
 ### 4.6 LangGraph Prompts
 
@@ -415,9 +686,9 @@ SSHManager
 
 推荐拆分：
 
+- `answer.py`
 - `route.py`
 - `planner.py`
-- `answer.py`
 - `summary.py`
 - `protocols.py`
 
@@ -437,9 +708,13 @@ Structured Output
 
 - `match` / `route` 节点使用路由 Prompt
 - `plan` 节点使用工具规划 Prompt
+- `build_messages` 节点根据 `response_mode` 选择故障排查 Prompt 或知识直答 Prompt
 - `summarize` 节点使用最终总结 Prompt
 - 若走知识库兜底路径，可使用知识问答 Prompt
 - 所有 Prompt 输出格式应由 `protocols.py` 统一约束
+- `classify` / `build_messages` / `summarize` Prompt 必须能够接收最近几轮会话上下文
+- 对于“对应的”“这个”“那个”“继续输出一下”这类承接式追问，Prompt 必须结合 `conversation_history` 理解，而不是只看当前单句输入
+- `summary` Prompt 应优先输出“结论 -> 原因/现状 -> 建议”的结构化自然语言，便于客户理解
 
 ### 4.7 LLM Layer
 
@@ -487,7 +762,7 @@ Node State Update
 - `classify` 节点：意图理解、问题分类
 - `match` / `route` 节点：候选 Playbook 路由判断
 - `plan` 节点：工具规划
-- `knowledge` 节点：检索结果压缩、证据选择、知识问答
+- `knowledge` 相关节点：文档装载、多路检索、证据合并、知识问答
 - `summarize` 节点：最终用户答案与诊断总结
 
 建议约定：
@@ -1107,23 +1382,23 @@ class VectorRecord:
 
 @dataclass
 class RetrievalRequest:
-    query: str  # 检索查询文本
-    top_k: int  # 召回数量
+    query: str = ""  # 检索查询文本
+    top_k: int = 0  # 召回数量
     channels: list[str] = field(default_factory=list)  # 检索通道，如 faq/bm25/vector
 
 
 @dataclass
 class RetrievalHit:
-    chunk_id: str  # 命中的切片 ID
-    filename: str  # 来源文件名
-    score: float  # 检索得分
+    chunk_id: str = ""  # 命中的切片 ID
+    filename: str = ""  # 来源文件名
+    score: float = 0.0  # 检索得分
     snippet: str = ""  # 命中文本片段
     channel: str = ""  # 来源检索通道
 
 
 @dataclass
 class RetrievalResult:
-    query: str  # 原始查询
+    query: str = ""  # 原始查询
     hits: list[RetrievalHit] = field(default_factory=list)  # 命中结果
     context: str = ""  # 拼接后的检索上下文
     confidence: float = 0.0  # 检索置信度

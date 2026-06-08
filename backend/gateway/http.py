@@ -8,6 +8,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from backend.gateway.app import GatewayApplication
+from backend.shared import get_logger
+
+
+logger = get_logger("gateway.http")
 
 
 def build_handler(app: GatewayApplication):
@@ -21,6 +25,9 @@ def build_handler(app: GatewayApplication):
                 return
             if parsed.path == "/api/robot/status":
                 self.send_json(app.ssh_manager.ui_payload())
+                return
+            if parsed.path == "/api/llm/status":
+                self.send_json(app.llm_status())
                 return
             if parsed.path == "/api/chat/history":
                 query = self.parse_query(parsed.query)
@@ -74,11 +81,33 @@ def build_handler(app: GatewayApplication):
                 if parsed.path == "/api/robot/disconnect":
                     self.send_json(app.disconnect_robot())
                     return
+                if parsed.path == "/api/llm/activate":
+                    self.send_json(
+                        app.activate_llm_profile(
+                            profile_id=str(data.get("profile_id", "")).strip(),
+                        )
+                    )
+                    return
+                if parsed.path == "/api/llm/profiles":
+                    self.send_json(
+                        app.upsert_llm_profile(
+                            payload=data,
+                            activate=bool(data.get("activate", False)),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
             except ValueError as exc:
+                logger.warning("Bad request on %s: %s", parsed.path, exc)
                 self.send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
             except KeyError as exc:
+                logger.warning("Missing resource on %s: %s", parsed.path, exc)
                 self.send_json({"error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+                return
+            except Exception:
+                logger.exception("Unhandled error while processing %s", parsed.path)
+                self.send_json({"error": "Internal server error"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
 
             self.send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
@@ -140,10 +169,11 @@ def run_dev_server(root: Path, host: str = "127.0.0.1", port: int = 8001) -> Non
     app = GatewayApplication(root=root)
     handler = build_handler(app)
     server = ThreadingHTTPServer((host, port), handler)
-    print(f"RobotClaw server running at http://{host}:{port}/frontend/")
+    logger.info("RobotClaw server running at http://%s:%s/frontend/", host, port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        logger.info("RobotClaw server interrupted by keyboard signal")
     finally:
+        logger.info("RobotClaw server shutting down")
         server.server_close()

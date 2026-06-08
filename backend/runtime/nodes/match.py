@@ -1,7 +1,3 @@
-from __future__ import annotations
+from backend.langgraph.nodes.match import match_playbook, match_playbook_node
 
-from backend.playbook import PlaybookEngine
-
-
-def match_playbook(playbook_engine: PlaybookEngine, content: str) -> dict[str, str | float]:
-    return playbook_engine.match(content)
+__all__ = ["match_playbook", "match_playbook_node"]

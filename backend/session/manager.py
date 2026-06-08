@@ -15,14 +15,6 @@ class SessionManager:
         self._lock = RLock()
         self._memory_manager = memory_manager or MemoryManager()
         self._store = SessionStore()
-        self._bootstrap_default_session()
-
-    def _bootstrap_default_session(self) -> None:
-        user = UserIdentity(user_id="u001", username="default")
-        session = self.create_session(user, title="导航问题诊断")
-        self.create_task(session.session_id, "导航问题诊断", task_type="diagnose")
-        session.active_topic = "导航问题诊断"
-        self._touch_session_preview(session.session_id)
 
     def create_session(self, user: UserIdentity, title: str | None = None) -> SessionState:
         with self._lock:

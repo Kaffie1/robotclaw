@@ -8,6 +8,8 @@ const state = {
   },
 };
 
+let pendingMessageId = 0;
+
 const refs = {
   sessionList: document.getElementById("sessionList"),
   chatScroll: document.getElementById("chatScroll"),
@@ -45,6 +47,13 @@ function activeSession() {
   return state.sessions.find((item) => item.id === state.activeSessionId);
 }
 
+function nowTimeLabel() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 function renderSessions() {
   refs.sessionList.innerHTML = "";
   for (const session of state.sessions) {
@@ -74,6 +83,9 @@ function renderMessages() {
     const bubble = fragment.querySelector(".message-bubble");
     const time = fragment.querySelector(".message-time");
     container.classList.add(message.role);
+    if (message.pending) {
+      container.classList.add("pending");
+    }
     bubble.textContent = message.content;
     time.textContent = message.created_at || "";
     refs.chatScroll.appendChild(fragment);
@@ -113,6 +125,52 @@ function promoteSession(sessionId) {
   state.sessions = [session, ...state.sessions.filter((item) => item.id !== sessionId)];
 }
 
+function ensureSessionForSending() {
+  const session = activeSession();
+  if (session) return session;
+
+  const draftSessionId = `draft-${Date.now()}`;
+  const draftSession = {
+    id: draftSessionId,
+    title: "新会话",
+    preview: "暂无消息",
+    messages: [],
+  };
+  state.sessions.unshift(draftSession);
+  state.activeSessionId = draftSessionId;
+  return draftSession;
+}
+
+function appendOptimisticMessages(sessionId, content) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return null;
+
+  const pendingId = `pending-${++pendingMessageId}`;
+  const createdAt = nowTimeLabel();
+  session.messages = [
+    ...(session.messages || []),
+    {
+      id: `${pendingId}-user`,
+      role: "user",
+      content,
+      created_at: createdAt,
+      pending: true,
+    },
+    {
+      id: `${pendingId}-assistant`,
+      role: "assistant",
+      content: "思考中",
+      created_at: createdAt,
+      pending: true,
+    },
+  ];
+  session.preview = content;
+  if (session.title === "新会话" || !session.title) {
+    session.title = content.slice(0, 12) || "新会话";
+  }
+  return pendingId;
+}
+
 async function bootstrap() {
   const data = await request("/api/bootstrap");
   state.sessions = data.sessions || [];
@@ -123,10 +181,27 @@ async function bootstrap() {
 
 async function sendMessage() {
   const content = refs.messageInput.value.trim();
-  if (!content || !state.activeSessionId) return;
+  if (!content) return;
 
+  const session = ensureSessionForSending();
+  const pendingId = appendOptimisticMessages(session.id, content);
+  refs.messageInput.value = "";
+  renderAll();
   refs.sendButton.disabled = true;
   try {
+    if (String(session.id).startsWith("draft-")) {
+      const created = await request("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      state.activeSessionId = created.active_session_id;
+      state.sessions = state.sessions.filter((item) => item.id !== session.id);
+      upsertSession(created.session);
+      promoteSession(state.activeSessionId);
+      appendOptimisticMessages(state.activeSessionId, content);
+      renderAll();
+    }
+
     const data = await request("/api/chat/send", {
       method: "POST",
       body: JSON.stringify({
@@ -134,12 +209,20 @@ async function sendMessage() {
         content,
       }),
     });
-    refs.messageInput.value = "";
     state.activeSessionId = data.active_session_id;
     upsertSession(data.session);
     promoteSession(state.activeSessionId);
     renderAll();
   } catch (error) {
+    const current = activeSession();
+    if (current) {
+      current.messages = (current.messages || []).filter((message) => {
+        const id = String(message.id || "");
+        return !pendingId || !id.startsWith(pendingId);
+      });
+      current.preview = current.messages.at(-1)?.content || "暂无消息";
+    }
+    renderAll();
     window.alert(error.message);
   } finally {
     refs.sendButton.disabled = false;

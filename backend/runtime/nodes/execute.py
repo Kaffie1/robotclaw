@@ -1,12 +1,3 @@
-from __future__ import annotations
+from backend.langgraph.nodes.execute import check_robot, check_robot_node
 
-from backend.tools import ToolExecutor
-from backend.tools.models import PlannedToolCall, ToolExecutionResult
-
-
-def check_robot(
-    tool_executor: ToolExecutor,
-    planned_tools: list[PlannedToolCall],
-    connected: bool,
-) -> list[ToolExecutionResult]:
-    return tool_executor.execute(planned_tools, connected)
+__all__ = ["check_robot", "check_robot_node"]

@@ -242,10 +242,37 @@ body {
   border-color: rgba(106, 103, 245, 0.16);
 }
 
+.message.pending .message-bubble {
+  opacity: 0.74;
+}
+
+.message.pending .message-time {
+  opacity: 0.7;
+}
+
+.message.assistant.pending .message-bubble::after {
+  content: "...";
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: thinking-dots 1.2s steps(4, end) infinite;
+}
+
 .message-time {
   margin-top: 8px;
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+@keyframes thinking-dots {
+  0% {
+    width: 0;
+  }
+
+  100% {
+    width: 1.5em;
+  }
 }
 
 .composer {
@@ -304,6 +331,10 @@ body {
   border-radius: 50%;
   background-color: transparent;
   box-shadow: 0 14px 28px rgba(106, 103, 245, 0.18);
+  background-image: url("./assets/send-icon.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 34px 34px;
 }
 
 .connection-panel {
@@ -541,7 +572,7 @@ body {
 }
 
 .sprite {
-  background-image: url("../mode.png");
+  background-image: url("./mode.png");
   background-repeat: no-repeat;
   background-size: 1536px 1024px;
 }
@@ -551,11 +582,6 @@ body {
   background-size: 520px 347px;
 }
 
-
-.sprite-send {
-  background-position: -206px -576px;
-  background-size: 742px 495px;
-}
 
 .sprite-command {
   background-position: -316px -650px;

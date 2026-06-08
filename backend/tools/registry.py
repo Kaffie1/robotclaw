@@ -4,7 +4,34 @@ from backend.tools.models import PlannedToolCall
 
 
 class ToolRegistry:
-    def plan(self, category: str, connected: bool) -> list[PlannedToolCall]:
+    SUPPORTED_TOOLS: tuple[str, ...] = (
+        "topic_monitor",
+        "node_status",
+        "tf_monitor",
+        "config_read",
+        "log_search",
+        "shell_command",
+    )
+
+    def list_definitions(self) -> list[dict[str, str]]:
+        return [
+            {
+                "name": tool_name,
+                "module": "runtime_tools",
+            }
+            for tool_name in self.SUPPORTED_TOOLS
+        ]
+
+    def plan(self, suggested_tools: list[str], connected: bool) -> list[PlannedToolCall]:
+        normalized_tools: list[str] = []
+        for tool_name in suggested_tools:
+            normalized = str(tool_name).strip()
+            if normalized and normalized in self.SUPPORTED_TOOLS and normalized not in normalized_tools:
+                normalized_tools.append(normalized)
+
+        if not normalized_tools:
+            return []
+
         if not connected:
             return [
                 PlannedToolCall(
@@ -12,28 +39,4 @@ class ToolRegistry:
                     params={"required": True, "reason": "执行机器人诊断前需要建立连接"},
                 )
             ]
-
-        plans: dict[str, list[PlannedToolCall]] = {
-            "lidar": [
-                PlannedToolCall(tool_name="topic_monitor", params={"topic": "/scan"}),
-                PlannedToolCall(tool_name="node_status", params={"name": "lidar_driver"}),
-                PlannedToolCall(tool_name="log_search", params={"keyword": "ERROR"}),
-            ],
-            "localization": [
-                PlannedToolCall(tool_name="node_status", params={"name": "amcl"}),
-                PlannedToolCall(tool_name="tf_monitor", params={"from": "map", "to": "base_link"}),
-                PlannedToolCall(tool_name="topic_monitor", params={"topic": "/amcl_pose"}),
-            ],
-            "mapping": [
-                PlannedToolCall(tool_name="node_status", params={"name": "map_server"}),
-                PlannedToolCall(tool_name="config_read", params={"path": "/maps/current.yaml"}),
-                PlannedToolCall(tool_name="log_search", params={"keyword": "map"}),
-            ],
-        }
-        return plans.get(
-            category,
-            [
-                PlannedToolCall(tool_name="shell_command", params={"command": "echo health-check"}),
-                PlannedToolCall(tool_name="log_search", params={"keyword": "ERROR"}),
-            ],
-        )
+        return [PlannedToolCall(tool_name=tool_name) for tool_name in normalized_tools]

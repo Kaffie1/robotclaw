@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, is_dataclass
 from typing import Any, TypeVar
 
@@ -11,7 +12,7 @@ T = TypeVar("T")
 
 
 def extract_json_object(text: str) -> dict[str, Any]:
-    normalized = text.strip()
+    normalized = _strip_think_blocks(text).strip()
     if not normalized:
         raise ValueError("LLM 返回为空，无法解析结构化输出")
     try:
@@ -42,11 +43,9 @@ def parse_route_output(payload: dict[str, Any]) -> RouteOutput:
 
 def parse_classify_output(payload: dict[str, Any]) -> ClassifyOutput:
     category = str(payload.get("category", "")).strip() or "general"
-    if category not in {"lidar", "localization", "mapping", "general"}:
-        category = "general"
     return ClassifyOutput(
         category=category,
-        summary=str(payload.get("summary", "")).strip() or "识别为通用运维问答",
+        summary=str(payload.get("summary", "")).strip() or "已完成通用问题理解",
         detail=str(payload.get("detail", "")).strip() or "当前先走通用聊天诊断链路。",
     )
 
@@ -76,3 +75,7 @@ def parse_summary_output(payload: dict[str, Any]) -> SummaryOutput:
         evidence=evidence,
         next_steps=next_steps,
     )
+
+
+def _strip_think_blocks(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)

@@ -12,9 +12,9 @@ def enter_playbook_node(state: dict) -> dict:
     runtime_state.playbook_execution.status = "running"
     runtime_state.trace.append(
         RouteDecision(
-            stage="Playbook 执行",
-            summary=f"进入 playbook 路径：{runtime_state.matched_playbook_id}",
-            detail=str(playbook.get("detail", "命中固定经验流程，跳过知识库兜底路径。")),
+            stage="模板执行",
+            summary=f"进入模板路径：{runtime_state.matched_playbook_id}",
+            detail=str(playbook.get("detail", "当前请求命中了预设模板路径。")),
         )
     )
     return {

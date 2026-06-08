@@ -9,8 +9,9 @@ def analyze_problem(
     playbook_id: str,
     tool_results: list[dict],
     connected: bool,
+    planned_tool_count: int,
 ) -> dict[str, str]:
-    return playbook_engine.analyze(playbook_id, tool_results, connected)
+    return playbook_engine.analyze(playbook_id, tool_results, connected, planned_tool_count)
 
 
 def analyze_problem_node(state: dict) -> dict:
@@ -23,8 +24,10 @@ def analyze_problem_node(state: dict) -> dict:
         runtime_state.matched_playbook_id,
         short_memory.tool_results,
         state["connected"],
+        len(runtime_state.planned_tools),
     )
     short_memory.rule_results = [analysis]
+    short_memory.scratchpad["analysis"] = analysis
     runtime_state.trace.append(RouteDecision(stage="问题分析", summary=analysis["summary"], detail=analysis["detail"]))
     return {
         "runtime_state": runtime_state,

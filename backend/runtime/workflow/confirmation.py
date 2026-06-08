@@ -11,6 +11,8 @@ def build_confirmation_request(
     node_path: str,
     message: str,
     options: list[str] | None = None,
+    resume_from_step: str = "",
+    payload: dict | None = None,
 ) -> ConfirmationRequest:
     return ConfirmationRequest(
         request_id=request_id,
@@ -19,4 +21,6 @@ def build_confirmation_request(
         node_path=node_path,
         message=message,
         options=list(options or []),
+        resume_from_step=resume_from_step,
+        payload=dict(payload or {}),
     )

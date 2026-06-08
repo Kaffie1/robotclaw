@@ -19,7 +19,29 @@ def route_after_match(state: ChatGraphState) -> str:
 
 
 def route_after_tool_planning(state: ChatGraphState) -> str:
+    if str(state.get("response_mode") or "").strip().lower() == "answer":
+        return "solution_generation"
     planned_tools = state["runtime_state"].planned_tools
+    if len(planned_tools) == 1 and planned_tools[0].tool_name == "connect_robot":
+        return "await_confirmation"
     if planned_tools:
         return "robot_check"
     return "problem_analysis"
+
+
+def route_after_interpret(state: ChatGraphState) -> str:
+    result_kind = str(state.get("result_kind") or "").strip().lower()
+    loop_count = int(state.get("model_loop_count") or 0)
+    if result_kind in {"final", "clarify", "confirmation"}:
+        return "finish"
+    if loop_count >= 6:
+        return "finish"
+    if result_kind == "tool_call":
+        return "call_tools"
+    return "retry"
+
+
+def route_after_call_tools(state: ChatGraphState) -> str:
+    if state.get("confirmation_request"):
+        return "await_confirmation"
+    return "call_model"

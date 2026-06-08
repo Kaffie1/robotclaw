@@ -32,6 +32,10 @@ class WorkflowStore:
         with self._lock:
             return self._resume_tokens.get(token)
 
+    def delete_resume_token(self, token: str) -> None:
+        with self._lock:
+            self._resume_tokens.pop(token, None)
+
     def save_confirmation(self, request: ConfirmationRequest) -> None:
         with self._lock:
             self._confirmations[request.task_id] = request
@@ -39,6 +43,10 @@ class WorkflowStore:
     def get_confirmation(self, task_id: str) -> ConfirmationRequest | None:
         with self._lock:
             return self._confirmations.get(task_id)
+
+    def clear_confirmation(self, task_id: str) -> None:
+        with self._lock:
+            self._confirmations.pop(task_id, None)
 
     def append_event(self, event: WorkflowEvent) -> None:
         with self._lock:
