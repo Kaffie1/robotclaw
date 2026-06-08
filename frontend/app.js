@@ -75,7 +75,7 @@ function renderMessages() {
     const time = fragment.querySelector(".message-time");
     container.classList.add(message.role);
     bubble.textContent = message.content;
-    time.textContent = message.time;
+    time.textContent = message.created_at || "";
     refs.chatScroll.appendChild(fragment);
   }
 

@@ -5,80 +5,9 @@ import mimetypes
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from backend.models import DiagnosisSummary, RuntimeEnvelope
-from backend.runtime import RuntimeService
-from backend.session_manager import SessionManager
-from backend.ssh_manager import SSHManager
-
-
-class GatewayApplication:
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.session_manager = SessionManager()
-        self.runtime = RuntimeService()
-        self.ssh_manager = SSHManager()
-
-    def bootstrap(self) -> dict:
-        payload = self.session_manager.bootstrap_payload()
-        payload["connection"] = self.ssh_manager.ui_payload()
-        return payload
-
-    def create_session(self, user_id: str) -> dict:
-        return self.session_manager.create_session_payload(user_id=user_id)
-
-    def send_chat(self, session_id: str, user_id: str, content: str) -> dict:
-        request = self.runtime.build_request(session_id=session_id, user_id=user_id, content=content)
-        task = self.session_manager.ensure_active_task(session_id, title=request.content)
-        session = self.session_manager.get_session_state(session_id)
-        session.current_robot_ref = self.ssh_manager.current_config().robot_ref
-        self.session_manager.set_task_status(task.task_id, "running", current_node="runtime")
-        self.session_manager.record_turn(session_id, "user", request.content)
-
-        envelope = RuntimeEnvelope(
-            session=session,
-            task=task,
-            diagnosis=DiagnosisSummary(),
-            robot_config=self.ssh_manager.current_config(),
-        )
-        _state, _diagnosis, response = self.runtime.run(
-            envelope=envelope,
-            request=request,
-            connected=self.ssh_manager.current_state().connected,
-        )
-        self.session_manager.record_turn(session_id, "assistant", response.summary)
-        self.session_manager.update_session_from_chat(session_id, request.content)
-        self.session_manager.set_task_status(task.task_id, response.status, current_node="completed")
-        return {
-            "session": self.session_manager.list_sessions()[0],
-            "active_session_id": session_id,
-            "response": {
-                "session_id": response.session_id,
-                "task_id": response.task_id,
-                "status": response.status,
-                "summary": response.summary,
-                "continuation_token": response.continuation_token,
-                "playbook_id": response.playbook_id,
-                "data": response.data,
-            },
-        }
-
-    def connect_robot(self, name: str, host: str) -> dict:
-        config, state = self.ssh_manager.connect(robot_ref=name.strip() or "robot-001", host=host.strip() or "192.168.1.100")
-        sessions = self.session_manager.list_sessions()
-        if sessions:
-            session = self.session_manager.get_session_state(sessions[0]["id"])
-            session.current_robot_ref = config.robot_ref
-        return {
-            "connected": state.connected,
-            "name": state.robot_ref,
-            "host": state.host,
-        }
-
-    def disconnect_robot(self) -> dict:
-        self.ssh_manager.disconnect()
-        return self.ssh_manager.ui_payload()
+from backend.gateway.app import GatewayApplication
 
 
 def build_handler(app: GatewayApplication):
@@ -92,6 +21,11 @@ def build_handler(app: GatewayApplication):
                 return
             if parsed.path == "/api/robot/status":
                 self.send_json(app.ssh_manager.ui_payload())
+                return
+            if parsed.path == "/api/chat/history":
+                query = self.parse_query(parsed.query)
+                session_id = str(query.get("session_id", "")).strip()
+                self.send_json(app.chat_history(session_id))
                 return
             self.serve_static(parsed.path)
 
@@ -110,6 +44,24 @@ def build_handler(app: GatewayApplication):
                         content=str(data.get("content", "")),
                     )
                     self.send_json(payload)
+                    return
+                if parsed.path == "/api/chat/cancel":
+                    self.send_json(
+                        app.cancel_chat(
+                            session_id=str(data.get("session_id", "")).strip(),
+                            task_id=str(data.get("task_id", "")).strip(),
+                        )
+                    )
+                    return
+                if parsed.path == "/api/chat/resume":
+                    self.send_json(
+                        app.resume_chat(
+                            session_id=str(data.get("session_id", "")).strip(),
+                            task_id=str(data.get("task_id", "")).strip(),
+                            token=str(data.get("resume_token", "")).strip(),
+                            user_id=str(data.get("user_id", "u001")).strip() or "u001",
+                        )
+                    )
                     return
                 if parsed.path == "/api/robot/connect":
                     self.send_json(
@@ -139,6 +91,10 @@ def build_handler(app: GatewayApplication):
             if not body:
                 return {}
             return json.loads(body.decode("utf-8"))
+
+        def parse_query(self, query: str) -> dict[str, str]:
+            parsed = parse_qs(query, keep_blank_values=True)
+            return {key: values[-1] for key, values in parsed.items() if values}
 
         def serve_static(self, path: str) -> None:
             normalized = path or "/"

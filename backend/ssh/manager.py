@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from threading import Lock
 
-from backend.common import now_iso
-from backend.models import RobotConnectionConfig, SSHConnectionState
+from backend.shared import now_iso
+from backend.ssh.models import RobotConnectionConfig, SSHConnectionState
 
 
 class SSHManager:

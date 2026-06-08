@@ -93,6 +93,12 @@ Tool 不做诊断。诊断由以下模块完成：
 - Rule Engine
 - Playbook
 
+约定：
+
+- `rule` 是独立通用组件
+- `playbook` 可以引用 `rule`
+- `playbook` 不内嵌具体规则实现
+
 ### 2.4 单活跃机器人设计
 
 当前系统允许在运行期间切换机器人，但同一时间只允许一个活跃机器人实例存在，因此：
@@ -143,12 +149,20 @@ SSHManager
            │
            ▼
 ┌─────────────────────┐
-│ LangGraph Runtime   │
+│   Runtime Service   │
 ├─────────────────────┤
 │ Runtime State       │
-│ Route Decision      │
-│ Knowledge Selection │
-│ Tool Planning       │
+│ Execution Context   │
+│ Interrupt / Resume  │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ LangGraph Orchestr. │
+├─────────────────────┤
+│ Graph Builder       │
+│ Node Router         │
+│ Node Scheduling     │
 └──────────┬──────────┘
            │
            ├──────────────────────────────┐
@@ -170,19 +184,22 @@ SSHManager
                 ┌─────────────────────┐
                 │   Tool Executor     │
                 ├─────────────────────┤
-                │ Rule Engine         │
                 │ Tool Registry       │
                 └──────────┬──────────┘
                            │
+                           ├───────────────┐
+                           │               │
+                           ▼               ▼
+┌─────────────────────┐   ┌─────────────────────┐
+│     Rule Engine     │   │     SSH Manager     │
+├─────────────────────┤   ├─────────────────────┤
+│ Rule Registry       │   │ Current Config      │
+│ Rule Evaluate       │   │ Current SSH Client  │
+└──────────┬──────────┘   └──────────┬──────────┘
+           │                         │
+           └──────────────┬──────────┘
+                          │
                            ▼
-┌─────────────────────┐
-│     SSH Manager     │
-├─────────────────────┤
-│ Current Config      │
-│ Current SSH Client  │
-└──────────┬──────────┘
-           │
-           ▼
 ┌─────────────────────┐
 │       Robot         │
 └──────────┬──────────┘
@@ -227,6 +244,8 @@ SSHManager
 - 管理会话
 - 管理任务状态
 - 管理上下文
+- 提供会话查询与切换入口
+- 对外投影当前任务的可见执行状态
 
 状态边界：
 
@@ -246,6 +265,19 @@ SSHManager
 - `failed`
 - `completed`
 
+推荐文件拆分：
+
+- `models.py`：定义 `SessionState`、`TaskState`、`UserIdentity`
+- `manager.py`：会话创建、任务切换、状态更新
+- `store.py`：Session / Task 的持久化抽象
+- `history.py`：会话历史读取、摘要预览、最近消息拼装
+
+建议：
+
+- `SessionManager` 只拥有 `SessionState`、`TaskState`
+- 聊天记录不要直接塞进 `SessionManager`
+- 会话预览标题、最近消息摘要可通过 `history.py` 或 `memory` 协作生成
+
 ### 4.3 Memory Manager
 
 分三层：
@@ -257,6 +289,8 @@ SSHManager
 - 工具结果
 - 规则结果
 - 执行节点
+- 当前阶段中间产物
+- 最近一次人工确认上下文
 
 #### Session Memory
 
@@ -264,6 +298,8 @@ SSHManager
 
 - 聊天记录
 - 上下文
+- 当前会话共享变量
+- 最近若干轮问题与结论
 
 #### Long Memory
 
@@ -272,8 +308,58 @@ SSHManager
 - 历史故障
 - 历史诊断
 - 历史解决方案
+- 可复用经验
+
+推荐文件拆分：
+
+- `models.py`：定义 `ShortMemory`、`SessionMemory`、`LongMemoryRecord`、`ChatTurn`
+- `manager.py`：统一内存协调入口
+- `short_memory.py`：当前任务短期记忆的读写与裁剪
+- `session_memory.py`：会话级聊天历史与变量管理
+- `long_memory.py`：长期记忆记录、检索与归档
+- `store.py`：memory 的持久化抽象
+
+边界：
+
+- `ShortMemory` 面向单任务运行过程
+- `SessionMemory` 面向单会话多轮对话
+- `LongMemory` 面向跨会话的经验沉淀
+- `MemoryManager` 负责统一路由，不建议让 Runtime 直接操作底层三类 memory 实现
 
 ### 4.4 Runtime
+
+`Runtime` 不负责图编排，负责诊断任务的运行承载与执行协作。
+
+职责：
+
+- 持有 `RuntimeState`
+- 管理运行时上下文
+- 对接 Session / Memory / Tool / SSH / Diagnosis
+- 管理中断恢复入口
+- 对外暴露统一的 `run()` / `resume()` / `cancel()` 能力
+
+边界：
+
+- `Runtime` 不负责定义 LangGraph 节点连接关系
+- `Runtime` 不负责维护 Prompt 模板
+- `Runtime` 不直接替代 ToolExecutor、PlaybookEngine、KnowledgeService
+
+`runtime/workflow/` 推荐文件拆分：
+
+- `events.py`：运行事件定义与发布格式
+- `playbook_state.py`：playbook 执行状态投影、实时状态快照
+- `confirmation.py`：人工确认请求生成、确认结果写回
+- `resume.py`：中断恢复令牌、恢复位置、恢复参数处理
+- `context.py`：运行时上下文展开、变量解析、上下文读写
+
+约定：
+
+- `runtime/service.py` 负责统一入口
+- `runtime/control.py` 负责 run / resume / cancel 的控制逻辑
+- `runtime/workflow/` 负责“运行过程控制”，不负责图编排
+- `runtime/workflow/` 不直接替代 LangGraph 节点
+
+### 4.5 LangGraph Orchestrator
 
 采用：
 
@@ -284,9 +370,134 @@ SSHManager
 - 路由
 - 状态流转
 - 流程编排
-- 中断恢复
+- 节点调度
+- 图构建
 
-### 4.5 Playbook Engine
+运行时节点建议拆分为：
+
+- `classify`
+- `match`
+- `knowledge`
+- `plan`
+- `execute`
+- `analyze`
+- `summarize`
+
+约定：
+
+- `Runtime` 负责运行
+- `LangGraph` 负责编排
+- `LangGraph` 通过节点调用 Runtime 相关能力，而不是反过来把全部逻辑堆进 Runtime
+- 推荐代码组织上将二者拆为 `backend/runtime/` 与 `backend/langgraph/` 两个目录
+- `langgraph/builder.py` 负责声明节点、边和入口点
+- `langgraph/router.py` 负责条件分支判断
+
+同时将 `prompts` 放入 `langgraph/` 目录下，作为编排层的配套模块，为 LangGraph 节点提供统一 Prompt 构造能力，而不是把 Prompt 文本散落在节点实现内部。
+
+### 4.6 LangGraph Prompts
+
+`prompts` 是 `langgraph` 的配套模块，负责管理所有给 LLM 使用的系统提示词、节点提示词和输出协议。
+
+职责：
+
+- 为 LangGraph 节点生成 Prompt
+- 统一维护输出协议
+- 统一维护角色设定
+- 屏蔽节点内的硬编码字符串
+
+边界：
+
+- `prompts` 只负责构造 Prompt，不负责调用模型
+- `prompts` 不负责执行工具
+- `prompts` 不负责保存运行状态
+- LangGraph 节点负责决定何时使用哪个 Prompt
+- Prompt 文件与节点文件同属编排层，不放入 Runtime 层
+
+推荐拆分：
+
+- `route.py`
+- `planner.py`
+- `answer.py`
+- `summary.py`
+- `protocols.py`
+
+集成方式：
+
+```text
+LangGraph Node
+  ↓
+Prompt Builder
+  ↓
+LLM Call
+  ↓
+Structured Output
+```
+
+建议约定：
+
+- `match` / `route` 节点使用路由 Prompt
+- `plan` 节点使用工具规划 Prompt
+- `summarize` 节点使用最终总结 Prompt
+- 若走知识库兜底路径，可使用知识问答 Prompt
+- 所有 Prompt 输出格式应由 `protocols.py` 统一约束
+
+### 4.7 LLM Layer
+
+`llm` 是独立于 `langgraph/prompts` 的模型接入层。
+
+职责：
+
+- 统一封装模型调用入口
+- 统一封装模型配置、超时、重试和流式输出能力
+- 统一处理结构化输出解析
+- 为 `langgraph` 节点提供稳定的 `invoke` / `invoke_structured` 能力
+
+边界：
+
+- `llm` 负责调用模型，不负责编排
+- `llm` 不负责工具执行
+- `llm` 不负责业务路由判断
+- `prompts` 负责构造输入，`llm` 负责把输入送入模型并解析输出
+- `langgraph/nodes` 负责决定在什么节点调用什么模型能力
+
+建议拆分：
+
+- `client.py`：统一模型调用入口
+- `config.py`：模型名、超时、temperature、provider 配置
+- `parser.py`：结构化输出解析与容错
+- `schemas.py`：分类、规划、总结等结构化输出 Schema
+- `models.py`：LLM 请求与响应对象
+
+典型调用链：
+
+```text
+LangGraph Node
+  ↓
+Prompt Builder
+  ↓
+LLM Client
+  ↓
+Structured Parser
+  ↓
+Node State Update
+```
+
+建议接入位置：
+
+- `classify` 节点：意图理解、问题分类
+- `match` / `route` 节点：候选 Playbook 路由判断
+- `plan` 节点：工具规划
+- `knowledge` 节点：检索结果压缩、证据选择、知识问答
+- `summarize` 节点：最终用户答案与诊断总结
+
+建议约定：
+
+- 默认通过 `llm/client.py` 统一发起调用，不在节点中直接拼 SDK 代码
+- 结构化输出优先，不依赖自由文本解析
+- 模型原始输出不直接写入 `RuntimeState`
+- 节点只写入已经通过 `parser.py` 校验后的结果
+
+### 4.8 Playbook Engine
 
 Playbook 形式：
 
@@ -313,7 +524,7 @@ playbooks/
  └── lidar_failure.yaml
 ```
 
-### 4.6 Knowledge / RAG
+### 4.9 Knowledge / RAG
 
 知识库用于承接未命中 Playbook 时的检索与回答辅助。
 
@@ -368,7 +579,7 @@ Runtime / LLM
   ↓
 中断
   ↓
-保存 Blackboard
+保存执行快照
   ↓
 保存当前 Node
   ↓
@@ -378,7 +589,7 @@ Runtime / LLM
 恢复流程：
 
 ```text
-恢复 Blackboard
+恢复执行快照
   ↓
 恢复 CurrentNode
   ↓
@@ -391,7 +602,7 @@ Runtime / LLM
 
 - 用户输入
 - Session 变量
-- Blackboard 变量
+- 行为树执行上下文变量
 - Tool 输出
 
 示例：
@@ -548,6 +759,40 @@ SSHManager 切换
 - 接收 Playbook 传入的数据
 - 根据规则条件做布尔判断
 - 返回 `true / false` 供 Playbook 决策
+- 支持规则注册、规则查找、规则执行
+- 支持规则定义校验
+
+定位：
+
+- `rule` 是独立目录
+- `rule` 是通用判断组件，不按业务场景拆 `builtin`
+- `playbook` 通过 `rule_id` 或规则引用来消费规则能力
+- 同一条规则可以被多个 playbook 复用
+
+边界：
+
+- `rule` 负责判断
+- `playbook` 负责流程
+- `tool` 负责采集事实
+- `diagnosis summary` 负责面向用户的最终汇总
+
+推荐文件拆分：
+
+- `models.py`：规则引用、规则调用、规则结果等核心数据结构
+- `schema.py`：规则定义校验
+- `registry.py`：规则注册与索引
+- `engine.py`：规则执行入口
+- `operators.py`：通用比较、集合、文本、时间等判断算子
+- `resolver.py`：字段路径解析、上下文取值、变量展开
+
+推荐能力：
+
+- 支持通过 `rule_id` 调用规则
+- 支持显式传入 `payload` 与 `context`
+- 支持通用比较运算，如 equals / contains / greater_than
+- 支持字段路径解析，如 `scan.hz`
+- 支持运行时上下文变量引用
+- 支持规则执行结果标准化
 
 示例：
 
@@ -606,7 +851,7 @@ Permission Guard
 
 处理方式：必须确认。
 
-## 10. Diagnosis Blackboard
+## 10. Diagnosis Summary
 
 在 LangGraph 方案下，诊断过程态由 Runtime State 承载，这里不再单独设计一套完整 Blackboard 主结构。
 
@@ -621,7 +866,8 @@ class DiagnosisSummary:
 
 说明：
 
-- 运行过程中的工具结果、规则结果、当前节点等信息，放在 LangGraph `RuntimeState`
+- 运行过程中的工具结果、规则结果、当前节点等信息，优先放在 `ShortMemory`
+- `RuntimeState` 只保留跨节点共享所必需的控制面信息和少量结构化结果引用
 - `DiagnosisSummary` 只保留最终面向用户的诊断结果
 
 ## 11. 模块数据结构定义
@@ -740,6 +986,9 @@ class ShortMemory:
     tool_results: list[dict[str, Any]] = field(default_factory=list)  # 当前任务工具结果
     rule_results: list[dict[str, Any]] = field(default_factory=list)  # 当前任务规则结果
     visited_nodes: list[str] = field(default_factory=list)  # 已执行节点路径
+    current_node: str = ""  # 当前运行节点
+    pending_confirmation: dict[str, Any] | None = None  # 待确认上下文
+    scratchpad: dict[str, Any] = field(default_factory=dict)  # 当前任务中间产物缓存
 
 
 @dataclass
@@ -747,6 +996,8 @@ class SessionMemory:
     session_id: str  # 关联会话 ID
     chat_history: list[ChatTurn] = field(default_factory=list)  # 会话聊天历史
     variables: dict[str, Any] = field(default_factory=dict)  # 会话级共享变量
+    topic_stack: list[str] = field(default_factory=list)  # 会话中出现过的话题轨迹
+    latest_summary: str = ""  # 最近一次会话摘要
 
 
 @dataclass
@@ -756,7 +1007,16 @@ class LongMemoryRecord:
     title: str  # 记忆标题
     content: str  # 记忆正文
     tags: list[str] = field(default_factory=list)  # 标签
+    source_session_id: str = ""  # 来源会话 ID
+    source_task_id: str = ""  # 来源任务 ID
+    created_at: str = ""  # 沉淀时间
 ```
+
+说明：
+
+- `ShortMemory` 适合放“本轮执行态”，例如工具结果、规则结果、待确认上下文
+- `SessionMemory` 适合放“多轮会话态”，例如聊天记录、变量、最近摘要
+- `LongMemoryRecord` 适合放“沉淀知识态”，例如稳定经验和历史解决方案
 
 ### 11.5 Runtime 数据结构
 
@@ -766,7 +1026,7 @@ class LongMemoryRecord:
 - SSH 连接信息、切分建库过程、工具原始结果、最终诊断结果不直接堆进 `RuntimeState`
 - `RuntimeState` 更偏控制面状态，不替代 `SessionState`、`TaskState`、`DiagnosisSummary`
 - 知识库的离线构建不属于 `Runtime`，但运行时检索结果需要进入 `RuntimeState`
-- `RuntimeState` 是 LangGraph 主 state，不直接承担任务生命周期管理
+- `RuntimeState` 是 Runtime 与 LangGraph 共享的运行态，不直接承担任务生命周期管理
 
 ```python
 @dataclass
@@ -801,10 +1061,13 @@ class RuntimeState:
 
 说明：
 
-- `RuntimeState` 是 LangGraph 图在节点之间流转的共享运行态
+- `RuntimeState` 是 Runtime 持有、并由 LangGraph 编排流程读写的共享运行态
 - `RuntimeState.current_step` 表示图当前执行到的节点或阶段
 - `RuntimeState.finished` 只表示图本轮是否收口，不等同于 `TaskState.status`
 - 当图进入 Playbook 路径时，`RuntimeState` 持有对当前 Playbook 的引用，但 Playbook 内部进度由 `PlaybookExecutionState` 管理
+- Prompt 模板本身不放进 `RuntimeState`
+- 只有节点真正需要跨节点共享的 Prompt 结果才允许写入 `RuntimeState`
+- 例如：路由结果、结构化规划结果、最终总结结果可以进入 RuntimeState，但原始 Prompt 字符串应保留在 `prompts/` 模块中
 
 ### 11.6 Knowledge / RAG 数据结构
 
@@ -971,6 +1234,12 @@ class NodeExecutionResult:
     message: str = ""  # 节点说明消息
 ```
 
+说明：
+
+- 这一组结构仅用于 playbook / 行为树内部执行快照
+- `BlackboardSnapshot` 不是系统级独立主结构，只是行为树执行器内部概念
+- 系统级运行共享状态仍以 `RuntimeState + ShortMemory` 为主
+
 ### 11.9 Tool 平台数据结构
 
 ```python
@@ -1083,6 +1352,52 @@ class RuleResult:
     passed: bool  # 判断结果，true 表示条件成立
 ```
 
+说明：
+
+- `RuleCondition` 表示最基础的单条判断条件
+- `RuleSpec` 表示可注册、可复用的通用规则定义
+- `RuleCall` 是 Runtime / Playbook 发给 Rule Engine 的标准调用对象
+- `RuleResult` 是统一返回格式，便于写入 `ShortMemory.rule_results`
+
+### 11.11.1 Runtime Workflow 数据结构
+
+```python
+@dataclass
+class ConfirmationRequest:
+    request_id: str  # 确认请求 ID
+    session_id: str  # 会话 ID
+    task_id: str  # 任务 ID
+    node_path: str  # 当前节点路径
+    message: str  # 给用户展示的确认信息
+    options: list[str] = field(default_factory=list)  # 候选选项
+
+
+@dataclass
+class ResumeToken:
+    token: str  # 恢复令牌
+    session_id: str  # 会话 ID
+    task_id: str  # 任务 ID
+    resume_from_step: str = ""  # 恢复步骤
+    payload: dict[str, Any] = field(default_factory=dict)  # 恢复所需附加数据
+
+
+@dataclass
+class WorkflowEvent:
+    event_id: str  # 事件 ID
+    session_id: str  # 会话 ID
+    task_id: str  # 任务 ID
+    event_type: str  # 事件类型
+    payload: dict[str, Any] = field(default_factory=dict)  # 事件载荷
+    created_at: str = ""  # 事件时间
+```
+
+说明：
+
+- `ConfirmationRequest` 对应 `runtime/workflow/confirmation.py`
+- `ResumeToken` 对应 `runtime/workflow/resume.py`
+- `WorkflowEvent` 对应 `runtime/workflow/events.py`
+- `playbook_state.py` 负责把 playbook 内部执行态投影为前端和 Runtime 可消费的结构
+
 ### 11.12 Permission Guard 数据结构
 
 这一部分仅作为预留设计，当前版本不实现。
@@ -1104,7 +1419,7 @@ class PermissionDecision:
     reason: str = ""  # 判定理由
 ```
 
-### 11.13 Diagnosis Blackboard 数据结构
+### 11.13 Diagnosis Summary 数据结构
 
 ```python
 @dataclass
@@ -1143,9 +1458,11 @@ class RuntimeEnvelope:
 
 - Gateway 负责创建 `ChatRequest` 和 `RuntimeEnvelope`
 - Session Manager 负责维护 `SessionState` 与 `TaskState`
-- RuntimeState 承载运行过程中的共享状态
+- Runtime 负责持有并管理 `RuntimeState`
+- LangGraph 负责驱动节点读写 `RuntimeState`
 - `DiagnosisSummary` 只承载最终汇总结果
 - SSHManager 只消费 `RobotConnectionConfig` 与 `RemoteCommand`
+- Prompt 模块只提供 Prompt Builder，不直接参与状态持久化
 
 机器人切换约定：
 
@@ -1249,7 +1566,11 @@ Gateway
   ↓
 Session Manager
   ↓
-LangGraph Runtime
+Runtime Service
+  ↓
+LangGraph Orchestrator
+  ↓
+Route Prompt
   ↓
 Playbook Match
   ↓
@@ -1277,9 +1598,15 @@ Gateway
   ↓
 Session Manager
   ↓
-LangGraph Runtime
+Runtime Service
+  ↓
+LangGraph Orchestrator
+  ↓
+Route Prompt
   ↓
 Knowledge Retrieve
+  ↓
+Planner Prompt
   ↓
 LLM Planner
   ↓
@@ -1291,48 +1618,18 @@ Rule Engine
   ↓
 Diagnosis Summary
   ↓
+Summary Prompt
+  ↓
 用户
 ```
 
-## 14. MVP 范围
-
-### Playbook
-
-- `navigation_failure`
-- `localization_failure`
-- `lidar_no_data`
-
-### Tool
-
-- `topic_monitor`
-- `node_status`
-- `tf_monitor`
-- `log_search`
-- `restart_service`
-
-### Memory
-
-- Session
-- History
-
-### Interrupt
-
-- 暂停
-- 恢复
-- 取消
-
-### SSH
-
-- 单活跃机器人
-- 前端配置
-- 支持 IP 切换
-
-## 15. 架构总结
+## 14. 架构总结
 
 ```text
 RobotClaw =
 
-LangGraph Runtime
+Runtime Service
++ LangGraph Orchestrator
 + Playbook Engine
 + PyTree Runner
 + Tool Platform
@@ -1340,7 +1637,7 @@ LangGraph Runtime
 + Memory
 + Interrupt
 + Rule Engine
-+ LLM Summary
++ Diagnosis Summary
 ```
 
 核心执行链路：
@@ -1356,9 +1653,222 @@ Tool Execute
   ↓
 Rule Judge
   ↓
-Blackboard
+ShortMemory / RuntimeState
   ↓
-LLM Summary
+Diagnosis Summary
 ```
 
 最终形成一个可扩展、可记忆、可中断、可远程诊断的机器人运维平台。
+
+推荐完整目录结构：
+
+```text
+robotclaw/
+├── server.py
+├── designed.md
+├── frontend/
+│   ├── index.html
+│   ├── app.js
+│   ├── styles.css
+│   └── assets/
+│       ├── robot-full.png
+│       ├── robot-tight.png
+│       └── ...
+├── backend/
+│   ├── __init__.py
+│   ├── shared/
+│   │   ├── __init__.py
+│   │   ├── ids.py
+│   │   ├── text.py
+│   │   └── time.py
+│   ├── gateway/
+│   │   ├── __init__.py
+│   │   ├── app.py
+│   │   ├── http.py
+│   │   └── models.py
+│   ├── session/
+│   │   ├── __init__.py
+│   │   ├── models.py
+│   │   ├── manager.py
+│   │   ├── store.py
+│   │   └── history.py
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── models.py
+│   │   ├── manager.py
+│   │   ├── short_memory.py
+│   │   ├── session_memory.py
+│   │   ├── long_memory.py
+│   │   └── store.py
+│   ├── runtime/
+│   │   ├── __init__.py
+│   │   ├── service.py
+│   │   ├── models.py
+│   │   ├── control.py
+│   │   └── workflow/
+│   │       ├── __init__.py
+│   │       ├── context.py
+│   │       ├── events.py
+│   │       ├── playbook_state.py
+│   │       ├── confirmation.py
+│   │       └── resume.py
+│   ├── langgraph/
+│   │   ├── __init__.py
+│   │   ├── builder.py
+│   │   ├── router.py
+│   │   ├── nodes/
+│   │       ├── __init__.py
+│   │       ├── classify.py
+│   │       ├── match.py
+│   │       ├── knowledge.py
+│   │       ├── plan.py
+│   │       ├── execute.py
+│   │       ├── analyze.py
+│   │       └── summarize.py
+│   │   └── prompts/
+│   │       ├── __init__.py
+│   │       ├── route.py
+│   │       ├── planner.py
+│   │       ├── answer.py
+│   │       ├── summary.py
+│   │       └── protocols.py
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── client.py
+│   │   ├── config.py
+│   │   ├── parser.py
+│   │   ├── schemas.py
+│   │   └── models.py
+│   ├── playbook/
+│   │   ├── __init__.py
+│   │   ├── catalog.py
+│   │   ├── loader.py
+│   │   ├── matcher.py
+│   │   ├── engine.py
+│   │   ├── parser.py
+│   │   ├── runner.py
+│   │   ├── schema.py
+│   │   └── models.py
+│   ├── rule/
+│   │   ├── __init__.py
+│   │   ├── engine.py
+│   │   ├── registry.py
+│   │   ├── operators.py
+│   │   ├── resolver.py
+│   │   ├── schema.py
+│   │   └── models.py
+│   ├── knowledge/
+│   │   ├── __init__.py
+│   │   ├── service.py
+│   │   ├── loader.py
+│   │   ├── splitter.py
+│   │   ├── embeddings.py
+│   │   ├── vectorstore.py
+│   │   ├── retrieval.py
+│   │   └── models.py
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── common.py
+│   │   ├── registry.py
+│   │   ├── executor.py
+│   │   ├── permission_guard.py
+│   │   ├── models.py
+│   │   ├── ros/
+│   │   │   ├── __init__.py
+│   │   │   ├── topic_monitor.py
+│   │   │   ├── node_status.py
+│   │   │   ├── service_call.py
+│   │   │   ├── action_check.py
+│   │   │   └── param_read.py
+│   │   ├── tf/
+│   │   │   ├── __init__.py
+│   │   │   └── tf_monitor.py
+│   │   ├── log/
+│   │   │   ├── __init__.py
+│   │   │   └── log_search.py
+│   │   ├── config/
+│   │   │   ├── __init__.py
+│   │   │   ├── config_read.py
+│   │   │   └── config_modify.py
+│   │   └── shell/
+│   │       ├── __init__.py
+│   │       └── shell_command.py
+│   ├── ssh/
+│   │   ├── __init__.py
+│   │   ├── manager.py
+│   │   ├── client.py
+│   │   └── models.py
+│   └── diagnosis/
+│       ├── __init__.py
+│       ├── summarizer.py
+│       └── models.py
+├── playbooks/
+│   ├── navigation_failure.yaml
+│   ├── localization_failure.yaml
+│   └── lidar_no_data.yaml
+├── data/
+│   ├── knowledge/
+│   │   ├── faq/
+│   │   ├── manuals/
+│   │   └── troubleshooting/
+│   ├── vectorstore/
+│   └── memory/
+├── tests/
+│   ├── gateway/
+│   ├── session/
+│   ├── memory/
+│   ├── runtime/
+│   ├── langgraph/
+│   ├── playbook/
+│   ├── rule/
+│   ├── tools/
+│   ├── ssh/
+│   ├── diagnosis/
+│   └── knowledge/
+└── scripts/
+    ├── ingest_knowledge.py
+    ├── build_vectorstore.py
+    └── dev_server.sh
+```
+
+其中：
+
+- `runtime/service.py` 负责运行入口与运行时协调
+- `runtime/control.py` 负责中断、恢复、取消等控制能力
+- `runtime/workflow/` 负责运行中断、人工确认、playbook 实时状态与恢复上下文
+- `runtime/workflow/events.py` 负责运行事件定义与广播载荷
+- `runtime/workflow/playbook_state.py` 负责 playbook 执行状态投影
+- `runtime/workflow/confirmation.py` 负责确认请求构造与确认结果回写
+- `runtime/workflow/resume.py` 负责恢复令牌与恢复参数处理
+- `runtime/workflow/context.py` 可选，用于变量展开与上下文读写
+- `langgraph/builder.py` 负责构建 LangGraph 主图
+- `langgraph/router.py` 负责图条件路由规则
+- `langgraph/nodes/` 负责节点逻辑
+- `langgraph/prompts/` 负责为节点生成 Prompt
+- `llm/` 负责统一模型调用、结构化解析与模型配置
+- `session/store.py` 负责 Session / Task 的持久化抽象
+- `session/history.py` 负责会话历史拼装与摘要预览
+- `session/manager.py` 负责会话创建、任务切换、状态更新
+- `memory/short_memory.py` 负责单任务短期记忆
+- `memory/session_memory.py` 负责单会话会话记忆
+- `memory/long_memory.py` 负责长期记忆沉淀与检索
+- `memory/manager.py` 负责三层 memory 的统一路由入口
+- `playbook/` 负责 Playbook 的加载、匹配、Schema 校验、解析和执行
+- `rule/` 负责通用规则注册、Schema 校验和判断执行
+- `rule/operators.py` 负责通用比较运算
+- `rule/resolver.py` 负责字段路径解析与上下文取值
+- `knowledge/` 负责知识库离线准备与运行时检索
+- `tools/base.py` 负责工具定义与运行时上下文抽象
+- `tools/registry.py` 负责工具注册、检索与统一调用入口
+- `tools/` 负责工具权限控制和分类实现
+- `ssh/` 负责唯一 SSH 连接与命令执行
+- `diagnosis/` 负责最终诊断总结与用户答案组织
+
+参考 `old/backend/runtime` 的设计吸收：
+
+- 保留 `playbook`、`rule`、`tools`、`workflow` 四层分工
+- 保留 `tool definition + tool registry + tool runtime context` 的分层方式
+- 保留 `playbook schema` 与 `rule schema` 的显式校验层
+- 保留 `playbook_state / confirmation / resume` 这类运行时状态组件
+- 但新结构中将编排层单独提升到 `langgraph/`，不再与 runtime 本身混放

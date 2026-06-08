@@ -1,27 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from threading import RLock
 
-from backend.common import infer_title, next_session_id, next_task_id, now_hhmm, now_iso
-from backend.models import ChatTurn, SessionMemory, SessionState, TaskState, TimestampSet, UserIdentity
+from backend.memory import MemoryManager
+from backend.memory.models import SessionMemory
+from backend.session.history import build_preview, serialize_messages
+from backend.session.models import ChatTurn, SessionState, TaskState, TimestampSet, UserIdentity
+from backend.session.store import SessionStore
+from backend.shared import infer_title, next_session_id, next_task_id, now_hhmm, now_iso
 
 
 class SessionManager:
-    def __init__(self) -> None:
+    def __init__(self, memory_manager: MemoryManager | None = None) -> None:
         self._lock = RLock()
-        self._sessions: dict[str, SessionState] = {}
-        self._tasks: dict[str, TaskState] = {}
-        self._memory: dict[str, SessionMemory] = {}
-        self._session_order: list[str] = []
+        self._memory_manager = memory_manager or MemoryManager()
+        self._store = SessionStore()
         self._bootstrap_default_session()
 
     def _bootstrap_default_session(self) -> None:
         user = UserIdentity(user_id="u001", username="default")
         session = self.create_session(user, title="导航问题诊断")
-        memory = self._memory[session.session_id]
-        task = self.create_task(session.session_id, "导航问题诊断", task_type="diagnose")
-        session.current_task_id = task.task_id
+        self.create_task(session.session_id, "导航问题诊断", task_type="diagnose")
         session.active_topic = "导航问题诊断"
         self._touch_session_preview(session.session_id)
 
@@ -36,9 +35,8 @@ class SessionManager:
                 active_topic=title or "",
                 timestamps=timestamps,
             )
-            self._sessions[session_id] = session
-            self._memory[session_id] = SessionMemory(session_id=session_id)
-            self._session_order.insert(0, session_id)
+            self._store.save_session(session)
+            self._memory_manager.ensure_session_memory(session_id)
             return session
 
     def create_task(self, session_id: str, title: str, task_type: str) -> TaskState:
@@ -53,42 +51,50 @@ class SessionManager:
                 status="created",
                 timestamps=timestamps,
             )
-            self._tasks[task_id] = task
-            session = self._sessions[session_id]
+            self._store.save_task(task)
+            session = self._store.get_session(session_id)
             session.current_task_id = task_id
             session.status = "created"
             session.timestamps.updated_at = now_iso()
+            self._store.save_session(session)
             return task
 
     def ensure_active_task(self, session_id: str, title: str) -> TaskState:
         with self._lock:
-            session = self._sessions[session_id]
-            if session.current_task_id and session.current_task_id in self._tasks:
-                return self._tasks[session.current_task_id]
+            session = self._store.get_session(session_id)
+            if session.current_task_id and self._store.has_task(session.current_task_id):
+                return self._store.get_task(session.current_task_id)
             return self.create_task(session_id, title=title, task_type="diagnose")
 
     def record_turn(self, session_id: str, role: str, content: str) -> None:
         with self._lock:
-            memory = self._memory[session_id]
+            memory = self._memory_manager.get_session_memory(session_id)
             memory.chat_history.append(ChatTurn(role=role, content=content, created_at=now_hhmm()))
-            session = self._sessions[session_id]
+            memory.latest_summary = content.replace("\n", " ").strip()[:120]
+            if role == "user":
+                memory.topic_stack.append(content.strip()[:80])
+                memory.topic_stack = memory.topic_stack[-10:]
+            session = self._store.get_session(session_id)
             session.timestamps.updated_at = now_iso()
+            self._store.save_session(session)
             self._move_to_front(session_id)
 
     def update_session_from_chat(self, session_id: str, title_seed: str) -> None:
         with self._lock:
-            session = self._sessions[session_id]
+            session = self._store.get_session(session_id)
             if not session.active_topic:
                 session.active_topic = title_seed
-            if session.current_task_id in self._tasks:
-                task = self._tasks[session.current_task_id]
+            if session.current_task_id and self._store.has_task(session.current_task_id):
+                task = self._store.get_task(session.current_task_id)
                 task.title = infer_title(title_seed, task.title)
                 task.timestamps.updated_at = now_iso()
+                self._store.save_task(task)
+            self._store.save_session(session)
             self._touch_session_preview(session_id)
 
     def set_task_status(self, task_id: str, status: str, current_node: str = "", error: str = "") -> None:
         with self._lock:
-            task = self._tasks[task_id]
+            task = self._store.get_task(task_id)
             task.status = status
             task.current_node = current_node
             task.error = error
@@ -97,42 +103,31 @@ class SessionManager:
                 task.timestamps.started_at = now_iso()
             if status in {"completed", "failed", "cancelled"}:
                 task.timestamps.finished_at = now_iso()
+            self._store.save_task(task)
 
-            session = self._sessions[task.session_id]
+            session = self._store.get_session(task.session_id)
             session.status = status
             session.timestamps.updated_at = now_iso()
+            self._store.save_session(session)
 
     def list_sessions(self) -> list[dict]:
         with self._lock:
-            result: list[dict] = []
-            for session_id in self._session_order:
-                session = self._sessions[session_id]
-                preview = self._preview_for(session_id)
-                result.append(
-                    {
-                        "id": session.session_id,
-                        "title": session.active_topic or "新会话",
-                        "preview": preview,
-                        "messages": [asdict(turn) for turn in self._memory[session_id].chat_history],
-                    }
-                )
-            return result
+            return [self.session_payload(session_id) for session_id in self._store.list_session_ids()]
 
     def get_session_state(self, session_id: str) -> SessionState:
-        return self._sessions[session_id]
+        return self._store.get_session(session_id)
 
     def get_task_state(self, task_id: str) -> TaskState:
-        return self._tasks[task_id]
+        return self._store.get_task(task_id)
 
     def get_memory(self, session_id: str) -> SessionMemory:
-        return self._memory[session_id]
+        return self._memory_manager.get_session_memory(session_id)
 
     def bootstrap_payload(self) -> dict:
-        sessions = self.list_sessions()
-        active_session_id = self._session_order[0] if self._session_order else ""
+        session_ids = self._store.list_session_ids()
         return {
-            "sessions": sessions,
-            "active_session_id": active_session_id,
+            "sessions": self.list_sessions(),
+            "active_session_id": session_ids[0] if session_ids else "",
         }
 
     def create_session_payload(self, user_id: str) -> dict:
@@ -143,18 +138,48 @@ class SessionManager:
         self.set_task_status(task.task_id, "created")
         self.update_session_from_chat(session.session_id, "新会话")
         return {
-            "session": self.list_sessions()[0],
+            "session": self.session_payload(session.session_id),
             "active_session_id": session.session_id,
+        }
+
+    def session_payload(self, session_id: str) -> dict:
+        session = self._store.get_session(session_id)
+        memory = self._memory_manager.get_session_memory(session_id)
+        return {
+            "id": session.session_id,
+            "title": session.active_topic or "新会话",
+            "preview": build_preview(memory),
+            "messages": serialize_messages(memory),
+        }
+
+    def history_payload(self, session_id: str) -> dict:
+        session = self._store.get_session(session_id)
+        tasks = self._store.list_tasks_by_session(session_id)
+        return {
+            "session": self.session_payload(session_id),
+            "task_history": [
+                {
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "task_type": task.task_type,
+                    "status": task.status,
+                    "current_node": task.current_node,
+                    "error": task.error,
+                    "created_at": task.timestamps.created_at,
+                    "updated_at": task.timestamps.updated_at,
+                    "started_at": task.timestamps.started_at,
+                    "finished_at": task.timestamps.finished_at,
+                }
+                for task in tasks
+            ],
+            "active_task_id": session.current_task_id,
         }
 
     def _touch_session_preview(self, session_id: str) -> None:
         self._move_to_front(session_id)
 
     def _preview_for(self, session_id: str) -> str:
-        history = self._memory[session_id].chat_history
-        if not history:
-            return "暂无消息"
-        return history[-1].content.replace("\n", " ").strip()
+        return build_preview(self._memory_manager.get_session_memory(session_id))
 
     def _move_to_front(self, session_id: str) -> None:
-        self._session_order = [session_id] + [item for item in self._session_order if item != session_id]
+        self._store.promote_session(session_id)
