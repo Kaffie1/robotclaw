@@ -5,6 +5,7 @@ const state = {
     connected: false,
     name: "",
     host: "",
+    port: 22,
   },
 };
 
@@ -23,6 +24,8 @@ const refs = {
   connectionStatus: document.getElementById("connectionStatus"),
   robotName: document.getElementById("robotName"),
   robotHost: document.getElementById("robotHost"),
+  connectPassword: document.getElementById("connectPassword"),
+  passwordToggle: document.getElementById("passwordToggle"),
   connectionForm: document.getElementById("connectionForm"),
   disconnectButton: document.getElementById("disconnectButton"),
 };
@@ -83,6 +86,9 @@ function renderMessages() {
     const bubble = fragment.querySelector(".message-bubble");
     const time = fragment.querySelector(".message-time");
     container.classList.add(message.role);
+    if (message.error) {
+      container.classList.add("error");
+    }
     if (message.pending) {
       container.classList.add("pending");
     }
@@ -171,6 +177,31 @@ function appendOptimisticMessages(sessionId, content) {
   return pendingId;
 }
 
+function finalizePendingMessagesWithError(sessionId, pendingId, errorMessage) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session || !pendingId) return;
+
+  session.messages = (session.messages || []).map((message) => {
+    const id = String(message.id || "");
+    if (id === `${pendingId}-user`) {
+      return {
+        ...message,
+        pending: false,
+      };
+    }
+    if (id === `${pendingId}-assistant`) {
+      return {
+        ...message,
+        pending: false,
+        error: true,
+        content: `请求失败：${errorMessage}`,
+      };
+    }
+    return message;
+  });
+  session.preview = session.messages.at(-1)?.content || session.preview || "暂无消息";
+}
+
 async function bootstrap() {
   const data = await request("/api/bootstrap");
   state.sessions = data.sessions || [];
@@ -216,11 +247,7 @@ async function sendMessage() {
   } catch (error) {
     const current = activeSession();
     if (current) {
-      current.messages = (current.messages || []).filter((message) => {
-        const id = String(message.id || "");
-        return !pendingId || !id.startsWith(pendingId);
-      });
-      current.preview = current.messages.at(-1)?.content || "暂无消息";
+      finalizePendingMessagesWithError(current.id, pendingId, error.message || "请求失败");
     }
     renderAll();
     window.alert(error.message);
@@ -256,6 +283,8 @@ async function connectRobot(event) {
       body: JSON.stringify({
         name: String(form.get("name") || "").trim(),
         host: String(form.get("host") || "").trim(),
+        username: String(form.get("username") || "").trim(),
+        password: String(form.get("password") || ""),
       }),
     });
     renderConnection();
@@ -276,10 +305,19 @@ async function disconnectRobot() {
   }
 }
 
+function togglePasswordVisibility() {
+  const isVisible = refs.connectPassword.type === "text";
+  refs.connectPassword.type = isVisible ? "password" : "text";
+  refs.passwordToggle.setAttribute("aria-pressed", String(!isVisible));
+  refs.passwordToggle.title = isVisible ? "显示密码" : "隐藏密码";
+  refs.passwordToggle.setAttribute("aria-label", isVisible ? "显示密码" : "隐藏密码");
+}
+
 refs.sendButton.addEventListener("click", sendMessage);
 refs.newSessionButton.addEventListener("click", createSession);
 refs.connectionForm.addEventListener("submit", connectRobot);
 refs.disconnectButton.addEventListener("click", disconnectRobot);
+refs.passwordToggle.addEventListener("click", togglePasswordVisibility);
 refs.messageInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();

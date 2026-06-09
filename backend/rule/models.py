@@ -9,6 +9,8 @@ class RuleCondition:
     field: str
     op: str
     value: Any = None
+    extract: dict[str, Any] = field(default_factory=dict)
+    cast: str = ""
 
 
 @dataclass
@@ -16,6 +18,7 @@ class RuleSpec:
     rule_id: str
     name: str
     conditions: list[RuleCondition] = field(default_factory=list)
+    definition: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

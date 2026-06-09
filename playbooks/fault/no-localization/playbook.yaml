@@ -1,0 +1,176 @@
+version: 1
+description: diagnose no localization fault
+
+playbooks:
+  - id: no-localization
+    type: fault
+    title: 没有定位
+    context_schema:
+      map_name: { type: string, source: input }
+    root:
+      type: sequence
+      name: diagnose_no_localization
+      display_name: 排查没有定位
+      children:
+        - type: selector
+          name: ensure_lidar_stream_available
+          display_name: 确认激光数据可用
+          children:
+            - type: sequence
+              name: check_lidar_stream_ready
+              display_name: 采集并判断激光话题数据
+              children:
+                - type: action
+                  name: collect_lidar_stream
+                  display_name: 采集激光话题数据
+                  tool_name: ros_topic_echo
+                  arguments:
+                    name: /livox/lidar
+                - type: condition
+                  name: assert_lidar_stream
+                  display_name: 判断激光话题是否已有点云数据
+                  rule:
+                    rule_id: rule_1
+                    inputs:
+                      result: tool_outputs.collect_lidar_stream
+                  success_message: 激光话题已有点云数据
+            - type: call_playbook
+              name: recover_lidar_stream
+              display_name: 转入激光链路恢复
+              playbook_id: lidar-no-data
+              failure_message: 激光没有数据，先转入激光链路排查
+        - type: action
+          name: select_target_map_from_map_list
+          display_name: 获取并选择目标地图
+          tool_name: ros_service_call
+          arguments:
+            name: /zj_humanoid/navigation/get_map_list
+          confirmation:
+            when: after
+            mode: select
+            message: 请选择本次重定位要使用的地图；如果列表没有目标地图，也可以直接输入地图名
+            input:
+              type: index
+              label: 地图名称
+              placeholder: 例如 factory_map_b1
+              help_text: 可回复序号、选项文本，或者在列表为空时直接输入地图名
+              auto_select_if_single: true
+              options_source:
+                field: output
+                parser: string_list
+            output:
+              store_as: map_name
+              type: selected_option_value
+          require_confirmation: true
+        - type: condition
+          name: assert_target_map_list_available
+          display_name: 判断地图列表是否获取成功
+          rule:
+            rule_id: rule_2
+            inputs:
+              result: tool_outputs.select_target_map_from_map_list
+          failure_message: 可用地图列表获取失败，请检查地图服务或直接转人工确认目标地图
+        - type: action
+          name: run_auto_reloc
+          display_name: 执行自动重定位
+          tool_name: ros_service_call
+          arguments:
+            name: /zj_humanoid/perception/reloc
+            request:
+              method: auto
+              map_path:
+                from_context: map_name
+              x_pos: 0.0
+              y_pos: 0.0
+              z_pos: 0.0
+              x_ori: 0.0
+              y_ori: 0.0
+              z_ori: 0.0
+              w_ori: 1.0
+        - type: condition
+          name: assert_auto_reloc_started
+          display_name: 判断自动重定位是否执行成功
+          rule:
+            rule_id: rule_2
+            inputs:
+              result: tool_outputs.run_auto_reloc
+          failure_message: /zj_humanoid/perception/reloc 执行失败，请继续检查定位服务和参数
+        - type: action
+          name: collect_odom_after_reloc
+          display_name: 采集重定位后的里程计
+          tool_name: ros_topic_echo
+          arguments:
+            name: /zj_humanoid/navigation/odom_info
+        - type: condition
+          name: assert_odom_after_reloc
+          display_name: 判断重定位后的里程计是否恢复
+          rule:
+            rule_id: rule_3
+            inputs:
+              result: tool_outputs.collect_odom_after_reloc
+          failure_message: 激光有数据且已经执行 reloc，但 odom_info 仍然全 0，转算法同事继续分析
+        - type: sequence
+          name: confirm_odom_info_stable
+          display_name: 连续确认里程计恢复稳定
+          children:
+            - type: action
+              name: collect_odom_stable_round_1
+              display_name: 第一次采集稳定性里程计
+              tool_name: ros_topic_echo
+              arguments:
+                name: /zj_humanoid/navigation/odom_info
+            - type: condition
+              name: assert_odom_stable_round_1
+              display_name: 第一次判断里程计稳定性
+              rule:
+                rule_id: rule_3
+                inputs:
+                  result: tool_outputs.collect_odom_stable_round_1
+              failure_message: odom_info 需要连续确认不再全 0，当前还不能判定定位彻底恢复
+            - type: action
+              name: collect_odom_stable_round_2
+              display_name: 第二次采集稳定性里程计
+              tool_name: ros_topic_echo
+              arguments:
+                name: /zj_humanoid/navigation/odom_info
+            - type: condition
+              name: assert_odom_stable_round_2
+              display_name: 第二次判断里程计稳定性
+              rule:
+                rule_id: rule_3
+                inputs:
+                  result: tool_outputs.collect_odom_stable_round_2
+              failure_message: odom_info 需要连续确认不再全 0，当前还不能判定定位彻底恢复
+            - type: action
+              name: collect_odom_stable_round_3
+              display_name: 第三次采集稳定性里程计
+              tool_name: ros_topic_echo
+              arguments:
+                name: /zj_humanoid/navigation/odom_info
+            - type: condition
+              name: assert_odom_stable_round_3
+              display_name: 第三次判断里程计稳定性
+              rule:
+                rule_id: rule_3
+                inputs:
+                  result: tool_outputs.collect_odom_stable_round_3
+              failure_message: odom_info 需要连续确认不再全 0，当前还不能判定定位彻底恢复
+        - type: result
+          name: localization_recovered
+          display_name: 输出定位恢复结论
+          arguments:
+            status: success
+            message: 激光数据和 odom_info 已恢复，定位链路当前判定正常
+    escalation_notes:
+      - 激光无数据时，先转激光链路问题，不要继续重复做重定位
+      - 激光有数据且已经执行 /zj_humanoid/perception/reloc，但 /zj_humanoid/navigation/odom_info 仍长期全 0 时，转算法同事继续分析
+      - 如果重定位服务返回失败或异常，优先检查定位服务、地图配置和运行参数
+    execution_notes:
+      - 先看激光数据，再收集地图名，执行自动重定位，最后复检 odom_info 是否恢复
+      - ROS 检查统一走 rosbridge 侧能力，不要求人工登录容器后重复执行 rostopic
+      - 该流程默认只尝试一次自动重定位，避免在定位异常时重复扰动现场
+
+global_rules:
+  - 没有明确模块名时，只读排查
+  - 同一任务中最多执行一次自动恢复
+  - 恢复失败后立即转人工

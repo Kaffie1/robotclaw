@@ -1,6 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass
+class RemoteCommand:
+    command: str
+    timeout_sec: int = 30
+    cwd: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class RemoteCommandResult:
+    success: bool
+    exit_code: int = 0
+    stdout: str = ""
+    stderr: str = ""
 
 
 @dataclass

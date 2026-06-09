@@ -10,7 +10,11 @@ def build_confirmation_request(
     task_id: str,
     node_path: str,
     message: str,
+    kind: str = "confirmation",
+    mode: str = "approve",
     options: list[str] | None = None,
+    input: dict | None = None,
+    output: dict | None = None,
     resume_from_step: str = "",
     payload: dict | None = None,
 ) -> ConfirmationRequest:
@@ -20,7 +24,11 @@ def build_confirmation_request(
         task_id=task_id,
         node_path=node_path,
         message=message,
+        kind=kind,
+        mode=mode,
         options=list(options or []),
+        input=dict(input or {}),
+        output=dict(output or {}),
         resume_from_step=resume_from_step,
         payload=dict(payload or {}),
     )

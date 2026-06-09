@@ -1,0 +1,91 @@
+version: 1
+description: diagnose lidar no data fault
+
+playbooks:
+  - id: lidar-no-data
+    type: fault
+    title: 激光没有数据
+    root:
+      type: sequence
+      name: diagnose_lidar_no_data
+      display_name: 排查激光无数据
+      children:
+        - type: action
+          name: probe_lidar_host
+          display_name: 采集激光网络连通性
+          tool_name: ping_host
+          arguments:
+            host: 192.168.217.17
+            count: 1
+            timeout_seconds: 2
+        - type: condition
+          name: assert_lidar_host_reachable
+          display_name: 判断激光网络是否可达
+          rule:
+            rule_id: rule_1
+            inputs:
+              result: tool_outputs.probe_lidar_host
+          failure_message: 192.168.217.17 不通，先确保通信正常，可参考现场 mid360 操作文档
+        - type: action
+          name: docker_compose_down_sensor_lidar
+          display_name: 关闭激光容器
+          tool_name: remote_execute
+          arguments:
+            command: docker compose down sensor_lidar
+            cwd: /home/naviai/navi_project
+        - type: condition
+          name: assert_sensor_lidar_down
+          display_name: 判断激光容器是否停止成功
+          rule:
+            rule_id: rule_2
+            inputs:
+              result: tool_outputs.docker_compose_down_sensor_lidar
+          failure_message: sensor_lidar 容器停止失败，请询问相关人员
+        - type: action
+          name: docker_compose_up_sensor_lidar
+          display_name: 启动激光容器
+          tool_name: remote_execute
+          after_wait_seconds: 15
+          arguments:
+            command: docker compose up -d sensor_lidar
+            cwd: /home/naviai/navi_project
+            timeout_seconds: 30
+        - type: condition
+          name: assert_sensor_lidar_up
+          display_name: 判断激光容器是否启动成功
+          rule:
+            rule_id: rule_2
+            inputs:
+              result: tool_outputs.docker_compose_up_sensor_lidar
+          failure_message: sensor_lidar 容器启动失败，请询问相关人员
+        - type: action
+          name: collect_lidar_point_num
+          display_name: 采集激光点云数据
+          tool_name: ros_topic_echo
+          arguments:
+            name: /livox/lidar
+        - type: condition
+          name: assert_lidar_point_num_recovered
+          display_name: 判断激光点云是否恢复
+          rule:
+            rule_id: rule_3
+            inputs:
+              result: tool_outputs.collect_lidar_point_num
+          failure_message: point_num 没有大于 10000，请询问相关人员
+        - type: result
+          name: lidar_stream_recovered
+          display_name: 输出激光恢复结论
+          arguments:
+            status: success
+            message: 激光网络和容器恢复后，点云数据已经重新可用
+    escalation_notes:
+      - 如果 192.168.217.17 不通，先恢复网络通信
+      - sensor_lidar 容器 down/up 后 point_num 仍没有大于 10000 时，请询问相关人员
+    execution_notes:
+      - 这是子 playbook，通常由其他故障链路在确认激光无数据后调用
+      - 先确认激光 IP 通信正常，再进行容器恢复
+
+global_rules:
+  - 没有明确模块名时，只读排查
+  - 同一任务中最多执行一次自动恢复
+  - 恢复失败后立即转人工

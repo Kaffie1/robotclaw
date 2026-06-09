@@ -1,0 +1,66 @@
+version: 1
+description: chassis battery info missing rules
+
+rules:
+  rule_1:
+    op: and
+    conditions:
+      - type: compare
+        field: result.success
+        op: equals
+        cast: boolean
+        value: true
+      - type: compare
+        field: result.data.output.stdout
+        op: not_empty
+        cast: string
+
+  rule_2:
+    op: and
+    conditions:
+      - type: compare
+        field: result.success
+        op: equals
+        cast: boolean
+        value: true
+      - type: compare
+        field: result.data.output.stdout
+        op: not_empty
+      - type: compare
+        field: result.data.output.stdout
+        op: not_contains
+        value: Exited
+
+  rule_3:
+    op: and
+    conditions:
+      - type: compare
+        field: result.success
+        op: equals
+        cast: boolean
+        value: true
+      - type: compare
+        field: result.data.output.stdout
+        op: not_empty
+        cast: string
+
+  rule_4:
+    type: compare
+    field: result.data.output.exit_code
+    op: equals
+    cast: number
+    value: 0
+
+  rule_5:
+    op: and
+    conditions:
+      - type: compare
+        field: result.success
+        op: equals
+        cast: boolean
+        value: true
+      - type: compare
+        field: result.data.output.exit_code
+        op: equals
+        cast: number
+        value: 0

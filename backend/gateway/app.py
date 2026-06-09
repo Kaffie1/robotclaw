@@ -8,7 +8,8 @@ from backend.memory import MemoryManager
 from backend.runtime import RuntimeService
 from backend.session import SessionManager
 from backend.shared import get_logger, load_env_file
-from backend.ssh import SSHManager
+from backend.ssh import RobotConnectionConfig, SSHManager
+from backend.tools import ToolExecutor
 
 
 logger = get_logger("gateway.app")
@@ -20,8 +21,11 @@ class GatewayApplication:
         load_env_file(root / ".env")
         self.memory_manager = MemoryManager()
         self.session_manager = SessionManager(memory_manager=self.memory_manager)
-        self.runtime = RuntimeService(memory_manager=self.memory_manager)
         self.ssh_manager = SSHManager()
+        self.runtime = RuntimeService(
+            memory_manager=self.memory_manager,
+            tool_executor=ToolExecutor(ssh_manager=self.ssh_manager),
+        )
 
     def bootstrap(self) -> dict:
         logger.info("Bootstrap requested")
@@ -125,23 +129,51 @@ class GatewayApplication:
             },
         }
 
-    def connect_robot(self, name: str, host: str) -> dict:
-        logger.info("Connecting robot name=%s host=%s", name, host)
+    def connect_robot(
+        self,
+        name: str,
+        host: str,
+        *,
+        port: int | str = 22,
+        username: str = "",
+        password: str = "",
+        private_key_path: str = "",
+        ros_version: str = "",
+        workspace: str = "",
+        setup_script: str = "",
+    ) -> dict:
+        logger.info("Connecting robot name=%s host=%s port=%s username=%s", name, host, port, username)
         config, state = self.ssh_manager.connect(
-            robot_ref=name.strip() or "robot-001",
-            host=host.strip() or "192.168.1.100",
+            config=RobotConnectionConfig(
+                robot_ref=name.strip() or "naviai",
+                host=host.strip() or "172.16.9.136",
+                port=self._normalize_port(port),
+                username=username.strip() or "naviai",
+                password=password or "naviai@2024",
+                private_key_path=private_key_path.strip(),
+                ros_version=ros_version.strip(),
+                workspace=workspace.strip(),
+                setup_script=setup_script.strip(),
+            )
         )
+        if not state.connected:
+            error_message = str(state.last_error or "SSH 连接失败").strip() or "SSH 连接失败"
+            raise ValueError(f"连接机器人失败：{error_message}")
+
         sessions = self.session_manager.list_sessions()
         if sessions:
             session = self.session_manager.get_session_state(sessions[0]["id"])
             session.current_robot_ref = config.robot_ref
-        return {
-            "connected": state.connected,
-            "name": state.robot_ref,
-            "host": state.host,
-        }
+        return self.ssh_manager.ui_payload()
 
     def disconnect_robot(self) -> dict:
         logger.info("Disconnecting robot")
         self.ssh_manager.disconnect()
         return self.ssh_manager.ui_payload()
+
+    def _normalize_port(self, value: int | str) -> int:
+        try:
+            port = int(str(value or 22).strip() or "22")
+        except (TypeError, ValueError):
+            port = 22
+        return port if port > 0 else 22

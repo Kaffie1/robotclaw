@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from backend.tools import ToolExecutor
-from backend.tools.models import PlannedToolCall, ToolExecutionResult
+from backend.tools.models import ToolCall, ToolResult
 from backend.runtime.models import EvidenceItem, RouteDecision
 
 
 def check_robot(
     tool_executor: ToolExecutor,
-    planned_tools: list[PlannedToolCall],
+    planned_tools: list[ToolCall],
     connected: bool,
-) -> list[ToolExecutionResult]:
+) -> list[ToolResult]:
     return tool_executor.execute(planned_tools, connected)
 
 
@@ -27,11 +27,11 @@ def check_robot_node(state: dict) -> dict:
         RouteDecision(
             stage="工具执行",
             summary=_tool_execution_summary(runtime_state.tool_results),
-            detail="；".join(item.summary for item in runtime_state.tool_results) or "暂无执行结果",
+            detail="；".join(str(item.get("summary", "")).strip() for item in runtime_state.tool_results) or "暂无执行结果",
         )
     )
     diagnosis.evidence.extend(
-        EvidenceItem(source="tool", content=item.summary, confidence=0.9 if item.status == "completed" else 0.4)
+        EvidenceItem(source="tool", content=str(item.get("summary", "")).strip(), confidence=0.9 if item.get("success") else 0.4)
         for item in runtime_state.tool_results
     )
     return {
@@ -41,9 +41,9 @@ def check_robot_node(state: dict) -> dict:
     }
 
 
-def _tool_execution_summary(results: list[ToolExecutionResult]) -> str:
+def _tool_execution_summary(results: list[ToolResult]) -> str:
     if not results:
         return "当前没有执行任何工具动作"
-    completed = sum(1 for item in results if item.status == "completed")
-    blocked = sum(1 for item in results if item.status != "completed")
+    completed = sum(1 for item in results if item.get("success"))
+    blocked = sum(1 for item in results if not item.get("success"))
     return f"已完成 {completed} 个工具动作，阻塞 {blocked} 个动作"

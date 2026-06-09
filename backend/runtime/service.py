@@ -91,7 +91,7 @@ class RuntimeService:
             workflow_store=self.workflow_store,
             event_bus=self.event_bus,
         )
-        if state.current_step == "waiting_confirm" and not state.resume_token:
+        if state.current_step in {"waiting_confirm", "waiting_input"} and not state.resume_token:
             resume_token = build_resume_token(
                 token=next_resume_token(),
                 session_id=envelope.session.session_id,
@@ -129,7 +129,7 @@ class RuntimeService:
                 "trace": [asdict(item) for item in state.trace],
                 "evidence": [item.content for item in diagnosis.evidence],
                 "solutions": [asdict(item) for item in diagnosis.solutions],
-                "planned_tools": [asdict(item) for item in state.planned_tools],
+                "planned_tools": [dict(item) for item in state.planned_tools],
                 "tool_results": self.tool_executor.to_payload(state.tool_results),
                 "title_hint": infer_title(request.content, envelope.task.title),
                 "events": self.drain_events(envelope.task.task_id),
@@ -226,6 +226,8 @@ class RuntimeService:
         self.event_bus.publish(event)
 
     def _response_status(self, state: RuntimeState) -> str:
+        if state.current_step == "waiting_input":
+            return "waiting_input"
         if state.current_step == "waiting_confirm":
             return "waiting_confirm"
         if state.interrupt_flag:

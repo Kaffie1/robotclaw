@@ -21,9 +21,11 @@ from backend.langgraph.nodes import (
     retrieve_bm25_knowledge_node,
     retrieve_faq_knowledge_node,
     retrieve_vector_knowledge_node,
+    summarize_response_node,
 )
 from backend.langgraph.prompts import build_classify_prompt, build_planner_prompt, build_route_prompt, build_summary_prompt
 from backend.langgraph.router import route_after_call_tools, route_after_interpret, route_after_match
+from backend.langgraph.router import route_after_playbook_execution
 from backend.langgraph.state import ChatGraphState
 from backend.memory import MemoryManager
 from backend.playbook import PlaybookEngine
@@ -65,6 +67,7 @@ def build_chat_graph() -> Any:
     graph.add_node("interpret_output", interpret_model_output_node)
     graph.add_node("call_tools", call_tools_node)
     graph.add_node("await_confirmation", await_confirmation_node)
+    graph.add_node("summarize_response", summarize_response_node)
 
     graph.add_edge(START, "classify_query")
     graph.add_edge("classify_query", "match_playbook")
@@ -76,7 +79,15 @@ def build_chat_graph() -> Any:
             "knowledge_selection": "load_knowledge_source_docs",
         },
     )
-    graph.add_edge("playbook_execution", "build_messages")
+    graph.add_conditional_edges(
+        "playbook_execution",
+        route_after_playbook_execution,
+        {
+            "finish": END,
+            "summarize": "summarize_response",
+        },
+    )
+    graph.add_edge("summarize_response", END)
     graph.add_edge("load_knowledge_source_docs", "retrieve_knowledge_faq")
     graph.add_edge("load_knowledge_source_docs", "retrieve_knowledge_bm25")
     graph.add_edge("load_knowledge_source_docs", "retrieve_knowledge_vector")
@@ -128,6 +139,7 @@ STEP_TO_NODE: dict[str, str] = {
     "call_tools": "call_tools",
     "tool_planning": "build_messages",
     "waiting_confirm": "await_confirmation",
+    "waiting_input": "await_confirmation",
     "robot_check": "call_tools",
     "problem_analysis": "call_model",
     "solution_generation": "completed",
@@ -278,6 +290,9 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
         state.update(_run_node("playbook_execution", enter_playbook_node, state))
         if _is_terminal(state):
             return state
+        if route_after_playbook_execution(state) == "summarize" and _should_run("summarize_response", start_node):
+            state.update(_run_node("summarize_response", summarize_response_node, state))
+            return state
     if next_node == "knowledge_selection" and _should_run("load_knowledge_source_docs", start_node):
         state.update(_run_node("load_knowledge_source_docs", load_knowledge_source_docs_node, state))
         if _is_terminal(state):
@@ -355,7 +370,7 @@ def _resolve_start_node(runtime_state: RuntimeState, is_resume: bool) -> str:
 
 def _is_terminal(state: ChatGraphState) -> bool:
     runtime_state = state["runtime_state"]
-    return runtime_state.interrupt_flag or runtime_state.current_step == "waiting_confirm"
+    return runtime_state.interrupt_flag or runtime_state.finished or runtime_state.current_step in {"waiting_confirm", "waiting_input"}
 
 
 def _run_node(node_name: str, node_fn: Any, state: ChatGraphState) -> dict[str, Any]:
@@ -384,7 +399,7 @@ def _run_node(node_name: str, node_fn: Any, state: ChatGraphState) -> dict[str, 
 
     short_memory.current_node = node_name
     short_memory.visited_nodes.append(node_name)
-    runtime_state.playbook_execution.current_node = node_name
+    runtime_state.playbook_execution.current_node_id = node_name
     publish_workflow_event(
         store=workflow_store,
         event_bus=event_bus,
@@ -410,7 +425,7 @@ def _run_node(node_name: str, node_fn: Any, state: ChatGraphState) -> dict[str, 
             "finished": updated_runtime.finished,
             "playbook_state": {
                 "playbook_id": updated_runtime.playbook_execution.playbook_id,
-                "current_node": updated_runtime.playbook_execution.current_node,
+                "current_node": updated_runtime.playbook_execution.current_node_id,
                 "status": updated_runtime.playbook_execution.status,
             },
         },

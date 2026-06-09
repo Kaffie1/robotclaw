@@ -8,6 +8,7 @@ _task_counter = count(1)
 _request_counter = count(1)
 _event_counter = count(1)
 _resume_counter = count(1)
+_tool_call_counter = count(1)
 
 
 def next_session_id() -> str:
@@ -28,3 +29,7 @@ def next_event_id() -> str:
 
 def next_resume_token() -> str:
     return f"resume-{next(_resume_counter)}"
+
+
+def next_tool_call_id() -> str:
+    return f"toolcall-{next(_tool_call_counter)}"

@@ -6,7 +6,7 @@ from typing import Any
 from backend.playbook.models import PlaybookExecutionState
 from backend.session.models import SessionState, TaskState
 from backend.ssh.models import RobotConnectionConfig
-from backend.tools.models import PlannedToolCall, ToolExecutionResult
+from backend.tools.models import ToolCall, ToolResult
 
 
 @dataclass
@@ -45,7 +45,7 @@ class RuntimeState:
     route: str = ""
     matched_playbook_id: str = ""
     current_step: str = ""
-    planned_tools: list[PlannedToolCall] = field(default_factory=list)
+    planned_tools: list[ToolCall] = field(default_factory=list)
     retrieval_result: Any = None
     knowledge_used: bool = False
     knowledge_confidence: float = 0.0
@@ -55,7 +55,7 @@ class RuntimeState:
     resume_from_step: str = ""
     finished: bool = False
     trace: list[RouteDecision] = field(default_factory=list)
-    tool_results: list[ToolExecutionResult] = field(default_factory=list)
+    tool_results: list[ToolResult] = field(default_factory=list)
     playbook_execution: PlaybookExecutionState = field(default_factory=PlaybookExecutionState)
 
 

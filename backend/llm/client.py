@@ -21,8 +21,20 @@ class LLMBackend(Protocol):
 class ChatOpenAIBackend:
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+        self._llm = self._create_llm()
 
     def invoke(self, request_payload: LLMRequest) -> LLMResponse:
+        response = self._llm.invoke(_to_langchain_messages(request_payload.messages))
+        message = _extract_langchain_message_content(response.content)
+        finish_reason = str(getattr(response, "response_metadata", {}).get("finish_reason", "stop") or "stop")
+        return LLMResponse(
+            model=str(getattr(response, "response_metadata", {}).get("model_name", "") or self.config.model),
+            content=message,
+            finish_reason=finish_reason,
+            raw=_build_raw_payload(response),
+        )
+
+    def _create_llm(self) -> Any:
         api_base = (self.config.api_base or "").rstrip("/")
         if not api_base:
             raise ValueError("openai provider 缺少 api_base 配置")
@@ -34,23 +46,14 @@ class ChatOpenAIBackend:
         except Exception as exc:
             raise RuntimeError("聊天依赖未安装，请先安装 langchain-openai 和 openai") from exc
 
-        llm = ChatOpenAI(
-            model=request_payload.model,
+        return ChatOpenAI(
+            model=self.config.model,
             api_key=self.config.api_key,
             base_url=api_base,
-            temperature=request_payload.temperature,
-            max_tokens=request_payload.max_tokens,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
             timeout=self.config.timeout_seconds,
             extra_body=_build_extra_body(),
-        )
-        response = llm.invoke(_to_langchain_messages(request_payload.messages))
-        message = _extract_langchain_message_content(response.content)
-        finish_reason = str(getattr(response, "response_metadata", {}).get("finish_reason", "stop") or "stop")
-        return LLMResponse(
-            model=str(getattr(response, "response_metadata", {}).get("model_name", "") or request_payload.model),
-            content=message,
-            finish_reason=finish_reason,
-            raw=_build_raw_payload(response),
         )
 
 

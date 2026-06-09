@@ -2,20 +2,25 @@ from __future__ import annotations
 
 from backend.llm import parse_tool_plan_output
 from backend.tools import ToolExecutor
-from backend.tools.models import PlannedToolCall
+from backend.tools.models import ToolCall
 from backend.runtime.models import RouteDecision
 
 
-def plan_tools(tool_executor: ToolExecutor, suggested_tools: list[str], connected: bool) -> list[PlannedToolCall]:
-    return tool_executor.plan(suggested_tools, connected)
+def plan_tools(
+    tool_executor: ToolExecutor,
+    suggested_tools: list[str],
+    connected: bool,
+    *,
+    session_id: str = "",
+    task_id: str = "",
+) -> list[ToolCall]:
+    return tool_executor.plan(suggested_tools, connected, session_id=session_id, task_id=task_id)
 
 
-def summarize_tool_plan(planned_tools: list[PlannedToolCall]) -> str:
+def summarize_tool_plan(planned_tools: list[ToolCall]) -> str:
     if not planned_tools:
         return "当前无需工具调用"
-    if len(planned_tools) == 1 and planned_tools[0].tool_name == "connect_robot":
-        return "需要先连接机器人后再执行诊断"
-    names = ", ".join(call.tool_name for call in planned_tools)
+    names = ", ".join(str(call.get("tool_name") or "").strip() for call in planned_tools)
     return f"已生成 {len(planned_tools)} 个候选工具动作：{names}"
 
 
@@ -67,6 +72,8 @@ def plan_tools_node(state: dict) -> dict:
             state["tool_executor"],
             [item["tool_name"] for item in response.parsed["tools"]],
             state["connected"],
+            session_id=runtime_state.session_id,
+            task_id=runtime_state.task_id,
         )
         if planned_from_llm:
             runtime_state.planned_tools = planned_from_llm
@@ -76,7 +83,7 @@ def plan_tools_node(state: dict) -> dict:
         RouteDecision(
             stage="工具规划",
             summary=summarize_tool_plan(runtime_state.planned_tools),
-            detail=" -> ".join(call.tool_name for call in runtime_state.planned_tools) if runtime_state.planned_tools else "暂无工具计划",
+            detail=" -> ".join(str(call.get("tool_name") or "").strip() for call in runtime_state.planned_tools) if runtime_state.planned_tools else "暂无工具计划",
         )
     )
     return {

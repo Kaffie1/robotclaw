@@ -259,6 +259,16 @@ body {
   animation: thinking-dots 1.2s steps(4, end) infinite;
 }
 
+.message.assistant.error .message-bubble {
+  border-color: rgba(210, 88, 88, 0.22);
+  background: rgba(255, 243, 243, 0.96);
+  color: #9a3030;
+}
+
+.message.assistant.error .message-time {
+  color: #b55a5a;
+}
+
 .message-time {
   margin-top: 8px;
   font-size: 0.9rem;
@@ -523,6 +533,10 @@ body {
   color: #5a6680;
 }
 
+.password-field {
+  position: relative;
+}
+
 .field input {
   width: 100%;
   border: 1px solid rgba(131, 145, 182, 0.18);
@@ -534,9 +548,57 @@ body {
   outline: none;
 }
 
+.password-field input {
+  padding-right: 50px;
+}
+
 .field input:focus {
   border-color: rgba(106, 103, 245, 0.4);
   box-shadow: 0 0 0 4px rgba(106, 103, 245, 0.08);
+}
+
+.password-toggle {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 12px;
+  background: rgba(106, 103, 245, 0.08);
+  color: #667399;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.password-toggle:hover {
+  background: rgba(106, 103, 245, 0.14);
+}
+
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+  overflow: visible;
+}
+
+.password-toggle .eye-shape,
+.password-toggle .eye-pupil {
+  fill: currentColor;
+}
+
+.password-toggle .eye-slash {
+  display: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.password-toggle[aria-pressed="true"] .eye-slash {
+  display: block;
 }
 
 .split-inputs {

@@ -11,7 +11,11 @@ class ConfirmationRequest:
     task_id: str
     node_path: str
     message: str
+    kind: str = "confirmation"
+    mode: str = "approve"
     options: list[str] = field(default_factory=list)
+    input: dict[str, Any] = field(default_factory=dict)
+    output: dict[str, Any] = field(default_factory=dict)
     resume_from_step: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
 

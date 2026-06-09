@@ -1,4 +1,7 @@
 from __future__ import annotations
 
+from backend.playbook.loader import get_playbook_catalog
 
-PLAYBOOKS: dict[str, dict[str, str]] = {}
+
+def list_playbook_catalog() -> list[dict[str, str]]:
+    return get_playbook_catalog()

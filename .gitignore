@@ -1,9 +1,10 @@
 __pycache__/
 *.py[cod]
-
+.vscode/
 .runtime/
 # .codex/
 .env
 
 !data/.gitkeep
 doc/
+tests/

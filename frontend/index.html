@@ -85,11 +85,38 @@
         <form class="connection-form" id="connectionForm">
           <label class="field">
             <span>机器人名称</span>
-            <input id="connectName" name="name" type="text" placeholder="robot-001" />
+            <input id="connectName" name="name" type="text" value="naviai" placeholder="naviai" />
           </label>
           <label class="field">
             <span>IP 地址</span>
-            <input id="connectHost" name="host" type="text" placeholder="192.168.1.100" />
+            <input id="connectHost" name="host" type="text" value="172.16.9.136" placeholder="172.16.9.136" />
+          </label>
+          <label class="field">
+            <span>登录用户</span>
+            <input id="connectUsername" name="username" type="text" value="naviai" placeholder="naviai" />
+          </label>
+          <label class="field">
+            <span>登录密码</span>
+            <div class="password-field">
+              <input id="connectPassword" name="password" type="password" value="naviai@2024" placeholder="naviai@2024" />
+              <button
+                class="password-toggle"
+                id="passwordToggle"
+                type="button"
+                title="显示密码"
+                aria-label="显示密码"
+                aria-pressed="false"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    class="eye-shape"
+                    d="M12 5C6.5 5 2.1 8.4 1 12c1.1 3.6 5.5 7 11 7s9.9-3.4 11-7c-1.1-3.6-5.5-7-11-7Zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"
+                  />
+                  <circle class="eye-pupil" cx="12" cy="12" r="2.2" />
+                  <path class="eye-slash" d="M4.5 4.5 19.5 19.5" />
+                </svg>
+              </button>
+            </div>
           </label>
 
           <div class="connection-actions">

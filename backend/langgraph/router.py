@@ -18,12 +18,19 @@ def route_after_match(state: ChatGraphState) -> str:
     return "knowledge_selection"
 
 
+def route_after_playbook_execution(state: ChatGraphState) -> str:
+    runtime_state = state["runtime_state"]
+    if runtime_state.current_step in {"waiting_confirm", "waiting_input"}:
+        return "finish"
+    if runtime_state.finished:
+        return "finish"
+    return "summarize"
+
+
 def route_after_tool_planning(state: ChatGraphState) -> str:
     if str(state.get("response_mode") or "").strip().lower() == "answer":
         return "solution_generation"
     planned_tools = state["runtime_state"].planned_tools
-    if len(planned_tools) == 1 and planned_tools[0].tool_name == "connect_robot":
-        return "await_confirmation"
     if planned_tools:
         return "robot_check"
     return "problem_analysis"

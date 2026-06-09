@@ -1,0 +1,180 @@
+version: 1
+description: diagnose chassis battery info missing
+
+playbooks:
+  - id: chassis-no-battery-info
+    type: fault
+    title: 底盘未上报电量信息
+    context_schema:
+      chassis_restart_approved: { type: boolean, source: confirmation }
+    root:
+      type: sequence
+      name: diagnose_chassis_no_battery_info
+      display_name: 排查底盘未上报电量信息
+      children:
+        - type: action
+          name: collect_chassis_image
+          display_name: 采集 chassis 镜像信息
+          tool_name: remote_execute
+          arguments:
+            command: docker images --format '{{.Repository}} {{.Tag}}' | grep -w chassis
+            timeout_seconds: 20
+        - type: condition
+          name: assert_chassis_image_exists
+          display_name: 判断 chassis 镜像是否存在
+          rule:
+            rule_id: rule_1
+            inputs:
+              result: tool_outputs.collect_chassis_image
+          failure_message: chassis 镜像不存在，先确认部署是否完整
+        - type: action
+          name: collect_chassis_container
+          display_name: 采集 chassis 容器状态
+          tool_name: remote_execute
+          arguments:
+            command: docker ps --format '{{.Names}} {{.Status}}' | grep -w chassis
+            timeout_seconds: 20
+        - type: condition
+          name: assert_chassis_container_running
+          display_name: 判断 chassis 容器是否正常运行
+          rule:
+            rule_id: rule_2
+            inputs:
+              result: tool_outputs.collect_chassis_container
+          failure_message: chassis 容器未正常运行，先恢复容器状态
+        - type: selector
+          name: ensure_battery_topic_has_data
+          display_name: 确认电量话题是否已有数据
+          children:
+            - type: sequence
+              name: check_battery_topic_has_data
+              display_name: 采集并判断 /zj_humanoid/robot/battery_info 数据
+              children:
+                - type: action
+                  name: collect_battery_topic
+                  display_name: 采集电量话题数据
+                  tool_name: ros_topic_echo
+                  arguments:
+                    name: /zj_humanoid/robot/battery_info
+                - type: condition
+                  name: assert_battery_topic_has_data
+                  display_name: 判断电量话题是否已有数据
+                  rule:
+                    rule_id: rule_3
+                    inputs:
+                      result: tool_outputs.collect_battery_topic
+                  success_message: 底盘电量话题已经恢复可读
+            - type: sequence
+              name: recover_battery_topic
+              display_name: 继续排查并恢复电量话题
+              children:
+                - type: action
+                  name: probe_chassis_host
+                  display_name: 采集 192.168.217.1 网络连通性
+                  tool_name: ping_host
+                  arguments:
+                    host: 192.168.217.1
+                    count: 1
+                    timeout_seconds: 2
+                - type: condition
+                  name: assert_chassis_host_reachable
+                  display_name: 判断 192.168.217.1 网络是否可达
+                  rule:
+                    rule_id: rule_4
+                    inputs:
+                      result: tool_outputs.probe_chassis_host
+                  failure_message: 192.168.217.1 不通，先恢复底盘网络通信
+                - type: action
+                  name: docker_compose_down_chassis
+                  display_name: 停止 chassis 容器
+                  tool_name: remote_execute
+                  wait_seconds: 30
+                  arguments:
+                    command: docker compose down chassis
+                    cwd: /home/naviai/navi_project
+                    timeout_seconds: 30
+                  assert_ref: rule_5
+                  require_confirmation: true
+                  confirmation:
+                    when: before
+                    mode: approve
+                    message: 即将重启 chassis 容器以恢复电量上报，是否继续？
+                    output:
+                      store_as: chassis_restart_approved
+                      type: boolean
+                - type: condition
+                  name: assert_chassis_down
+                  display_name: 判断 chassis 容器是否停止成功
+                  rule:
+                    rule_id: rule_5
+                    inputs:
+                      result: tool_outputs.docker_compose_down_chassis
+                  failure_message: chassis 容器停止失败，请转相关人员继续处理
+                - type: action
+                  name: docker_compose_up_chassis
+                  display_name: 启动 chassis 容器
+                  tool_name: remote_execute
+                  wait_seconds: 30
+                  arguments:
+                    command: docker compose up -d chassis
+                    cwd: /home/naviai/navi_project
+                    timeout_seconds: 30
+                - type: condition
+                  name: assert_chassis_up
+                  display_name: 判断 chassis 容器是否启动成功
+                  rule:
+                    rule_id: rule_5
+                    inputs:
+                      result: tool_outputs.docker_compose_up_chassis
+                  failure_message: chassis 容器启动失败，请转相关人员继续处理
+                - type: sequence
+                  name: verify_battery_topic_has_data_after_restart
+                  display_name: 连续检查重启后电量话题是否恢复
+                  children:
+                    - type: action
+                      name: collect_battery_topic_after_restart_round_1
+                      display_name: 第一次采集重启后电量话题
+                      tool_name: ros_topic_echo
+                      arguments:
+                        name: /zj_humanoid/robot/battery_info
+                    - type: condition
+                      name: assert_battery_topic_after_restart_round_1
+                      display_name: 第一次判断重启后电量话题
+                      rule:
+                        rule_id: rule_3
+                        inputs:
+                          result: tool_outputs.collect_battery_topic_after_restart_round_1
+                      failure_message: 重启 chassis 后 /zj_humanoid/robot/battery_info 仍无数据，请继续检查底盘链路
+                    - type: action
+                      name: collect_battery_topic_after_restart_round_2
+                      display_name: 第二次采集重启后电量话题
+                      tool_name: ros_topic_echo
+                      arguments:
+                        name: /zj_humanoid/robot/battery_info
+                    - type: condition
+                      name: assert_battery_topic_after_restart_round_2
+                      display_name: 第二次判断重启后电量话题
+                      rule:
+                        rule_id: rule_3
+                        inputs:
+                          result: tool_outputs.collect_battery_topic_after_restart_round_2
+                      failure_message: 重启 chassis 后 /zj_humanoid/robot/battery_info 仍无数据，请继续检查底盘链路
+        - type: result
+          name: battery_topic_recovered
+          display_name: 输出电量恢复结论
+          arguments:
+            status: success
+            message: 底盘电量话题已经恢复，当前可以结束这条故障排查
+    escalation_notes:
+      - 如果 chassis 镜像不存在，先确认部署物是否完整，再决定是否重新部署底盘模块
+      - 如果 chassis 容器未正常运行或重启后仍无电量数据，继续检查底盘服务日志和底盘上游链路
+      - 如果 192.168.217.1 不通，优先恢复网络通信，再继续电量上报排查
+    execution_notes:
+      - 该流程优先按照镜像、容器、话题、网络、重启的顺序执行
+      - 恢复动作仅限一次 chassis 重启，避免重复扰动现场
+      - /zj_humanoid/robot/battery_info 来自 chassis 对外接口文档，统一以 rosbridge 侧话题可见性作为验证标准
+
+global_rules:
+  - 先做只读检查，再执行 chassis 重启
+  - 同一任务中最多自动重启一次 chassis
+  - 重启失败或恢复后仍无数据时立即转人工

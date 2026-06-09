@@ -8,6 +8,7 @@ from backend.langgraph.prompts import build_fault_chat_system_prompt, build_know
 from backend.llm.models import LLMMessage
 from backend.llm.parser import extract_json_object
 from backend.runtime.models import EvidenceItem, RouteDecision
+from backend.tools.models import build_tool_result_schema
 
 
 def build_messages_node(state: dict) -> dict:
@@ -201,34 +202,23 @@ def call_tools_node(state: dict) -> dict:
         if not tool_name:
             continue
         tool_args = command.get("arguments") if isinstance(command.get("arguments"), dict) else {}
-        planned_tools = tool_executor.plan([tool_name], state["connected"])
-        if len(planned_tools) == 1 and planned_tools[0].tool_name == "connect_robot":
-            runtime_state.planned_tools = planned_tools
-            runtime_state.resume_from_step = "call_model"
-            short_memory.scratchpad["confirmation_context"] = {
-                "resume_from_step": "call_model",
-                "node_path": "call_tools/connect_robot",
-                "message": "当前需要先建立机器人连接，连接完成后会继续执行后续诊断。",
-                "options": ["已完成连接，继续执行"],
-            }
-            state.update(
-                {
-                    "runtime_state": runtime_state,
-                    "short_memory": short_memory,
-                }
-            )
-            confirmation_result = await_confirmation_node(state)
-            confirmation_result["messages"] = messages
-            confirmation_result["pending_commands"] = []
-            confirmation_result["result_kind"] = "confirmation"
-            return confirmation_result
-
+        planned_tools = tool_executor.plan(
+            [tool_name],
+            state["connected"],
+            session_id=runtime_state.session_id,
+            task_id=runtime_state.task_id,
+        )
         if not planned_tools:
             result_payload = {
+                "call_id": "",
                 "tool_name": tool_name,
+                "success": False,
                 "status": "rejected",
                 "summary": f"工具 {tool_name} 不在白名单中，已忽略本次调用。",
                 "facts": {"params": tool_args},
+                "data": {"result_schema": build_tool_result_schema()},
+                "error": "tool_not_allowed",
+                "raw_output": "",
             }
             all_results_payload.append(result_payload)
             tool_feedback_lines.append(_build_tool_feedback_message(tool_name, tool_args, result_payload))
@@ -251,7 +241,7 @@ def call_tools_node(state: dict) -> dict:
                 EvidenceItem(
                     source="tool",
                     content=str(payload.get("summary", "")).strip(),
-                    confidence=0.75 if payload.get("status") == "completed" else 0.45,
+                    confidence=0.75 if payload.get("success") else 0.45,
                 )
             )
 

@@ -1,4 +1,4 @@
 from backend.ssh.manager import SSHManager
-from backend.ssh.models import RobotConnectionConfig, SSHConnectionState
+from backend.ssh.models import RemoteCommand, RemoteCommandResult, RobotConnectionConfig, SSHConnectionState
 
-__all__ = ["RobotConnectionConfig", "SSHConnectionState", "SSHManager"]
+__all__ = ["RemoteCommand", "RemoteCommandResult", "RobotConnectionConfig", "SSHConnectionState", "SSHManager"]

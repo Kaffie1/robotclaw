@@ -1550,10 +1550,21 @@ class ToolResult:
     call_id: str  # 对应的工具调用 ID
     tool_name: str  # 工具名
     success: bool  # 是否执行成功
-    data: dict[str, Any] = field(default_factory=dict)  # 结构化结果
-    error: str = ""  # 错误信息
-    raw_output: str = ""  # 原始输出文本
+    status: str  # 统一状态: completed / failed / blocked / unavailable / rejected
+    facts: dict[str, Any] = field(default_factory=dict)  # 面向规则和后续流程的结构化事实
+    summary: str = ""  # 给 LLM / 前端展示的简短摘要
+    data: dict[str, Any] = field(default_factory=dict)  # 补充载荷，业务输出统一放在 data.output
+    error: str = ""  # 错误码或错误摘要；成功时通常为空
+    raw_output: str = ""  # 原始输出文本，优先 stdout，否则回退 stderr
 ```
+
+约定：
+
+- `success` 只表达“工具本次执行是否成功”
+- `status` 只表达“工具当前处于什么状态”，必须属于 `completed / failed / blocked / unavailable / rejected`
+- `summary` 必须始终可读，优先面向前端展示和 LLM 回灌
+- `error` 成功时为空字符串，失败时写错误码或错误摘要
+- `data.output` 承载业务输出；不要再把 `exit_code/stdout/stderr` 之类字段额外漂到顶层
 
 ### 11.10 SSH 管理数据结构
 
@@ -1793,9 +1804,24 @@ SessionState.current_robot_ref 更新
   "call_id": "call_001",
   "tool_name": "topic_monitor",
   "success": true,
+  "status": "completed",
+  "facts": {
+    "topic": "/scan",
+    "exists": true,
+    "has_msg": false
+  },
+  "summary": "topic /scan 已注册，但暂未收到消息。",
   "data": {
-    "has_msg": false,
-    "hz": 0
+    "params": {
+      "topic": "/scan"
+    },
+    "output": {
+      "exists": true,
+      "has_msg": false,
+      "age": -1.0,
+      "hz": 0,
+      "last_msg_time": ""
+    }
   },
   "error": "",
   "raw_output": "topic exists, hz=0"

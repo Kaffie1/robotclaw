@@ -75,6 +75,13 @@ def build_handler(app: GatewayApplication):
                         app.connect_robot(
                             name=str(data.get("name", "")),
                             host=str(data.get("host", "")),
+                            port=data.get("port", 22),
+                            username=str(data.get("username", "")),
+                            password=str(data.get("password", "")),
+                            private_key_path=str(data.get("private_key_path", "")),
+                            ros_version=str(data.get("ros_version", "")),
+                            workspace=str(data.get("workspace", "")),
+                            setup_script=str(data.get("setup_script", "")),
                         )
                     )
                     return
@@ -165,7 +172,7 @@ def build_handler(app: GatewayApplication):
     return AppHandler
 
 
-def run_dev_server(root: Path, host: str = "127.0.0.1", port: int = 8001) -> None:
+def run_dev_server(root: Path, host: str = "0.0.0.0", port: int = 8005) -> None:
     app = GatewayApplication(root=root)
     handler = build_handler(app)
     server = ThreadingHTTPServer((host, port), handler)

@@ -35,14 +35,18 @@ def _render_tool_whitelist(tool_items: list[Any] | None = None) -> str:
     for item in tool_items:
         if not isinstance(item, dict):
             continue
-        name = str(item.get("name") or "").strip()
-        module = str(item.get("module") or "").strip()
+        name = str(item.get("tool_name") or item.get("name") or "").strip()
+        category = str(item.get("category") or "").strip()
+        description = str(item.get("description") or "").strip()
+        input_schema = item.get("input_schema") if isinstance(item.get("input_schema"), dict) else {}
         if not name:
             continue
-        if module:
-            lines.append(f"- {module}: {name}")
-        else:
-            lines.append(f"- {name}")
+        input_fields = ", ".join(str(field_name).strip() for field_name in input_schema.keys() if str(field_name).strip())
+        detail_parts = [part for part in [category, description] if part]
+        detail = " | ".join(detail_parts)
+        if input_fields:
+            detail = f"{detail} | inputs: {input_fields}" if detail else f"inputs: {input_fields}"
+        lines.append(f"- {name}" + (f" ({detail})" if detail else ""))
     return "\n".join(lines)
 
 

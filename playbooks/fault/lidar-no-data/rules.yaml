@@ -1,0 +1,42 @@
+version: 1
+description: lidar no data rules
+
+rules:
+  rule_1:
+    type: compare
+    field: result.data.output.exit_code
+    op: equals
+    cast: number
+    value: 0
+
+  rule_2:
+    op: and
+    conditions:
+      - type: compare
+        field: result.success
+        op: equals
+        cast: boolean
+        value: true
+      - type: compare
+        field: result.data.output.exit_code
+        op: equals
+        cast: number
+        value: 0
+
+  rule_3:
+    op: and
+    conditions:
+      - type: compare
+        field: result.success
+        op: equals
+        cast: boolean
+        value: true
+      - type: compare
+        field: result.data.output.stdout
+        extract:
+          type: regex
+          pattern: "point_num:\\s*(\\d+)"
+          group: 1
+        op: greater_than
+        cast: number
+        value: 10000

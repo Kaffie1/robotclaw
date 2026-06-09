@@ -17,11 +17,14 @@ def await_confirmation_node(state: dict) -> dict:
         confirmation_context.get("message")
         or "当前需要先建立外部连接，连接完成后再继续执行工具动作。"
     ).strip()
+    waiting_kind = str(confirmation_context.get("kind") or "").strip().lower()
+    waiting_mode = str(confirmation_context.get("mode") or "").strip().lower()
     options = confirmation_context.get("options")
-    if not isinstance(options, list) or not options:
+    if (not isinstance(options, list) or not options) and waiting_kind != "input":
         options = ["已完成连接，继续执行"]
-
-    runtime_state.current_step = "waiting_confirm"
+    if not isinstance(options, list):
+        options = []
+    runtime_state.current_step = "waiting_input" if waiting_kind == "input" or waiting_mode in {"input", "select"} else "waiting_confirm"
     runtime_state.finished = False
     runtime_state.resume_from_step = resume_from_step
     confirmation = build_confirmation_request(
@@ -30,10 +33,14 @@ def await_confirmation_node(state: dict) -> dict:
         task_id=runtime_state.task_id,
         node_path=node_path,
         message=message,
+        kind=waiting_kind or "confirmation",
+        mode=str(confirmation_context.get("mode") or ("input" if waiting_kind == "input" else "approve")).strip(),
         options=options,
+        input=dict(confirmation_context.get("input") or {}) if isinstance(confirmation_context.get("input"), dict) else {},
+        output=dict(confirmation_context.get("output") or {}) if isinstance(confirmation_context.get("output"), dict) else {},
         resume_from_step=runtime_state.resume_from_step,
-        payload={
-            "planned_tools": [item.tool_name for item in runtime_state.planned_tools],
+        payload=dict(confirmation_context.get("payload") or {}) if isinstance(confirmation_context.get("payload"), dict) else {
+            "planned_tools": [str(item.get("tool_name") or "").strip() for item in runtime_state.planned_tools],
             "reason": "robot_connection_required",
         },
     )
