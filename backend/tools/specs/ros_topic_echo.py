@@ -22,6 +22,7 @@ from backend.tools.specs.common import (
 def build_ros_topic_echo_input_schema() -> dict[str, dict]:
     return {
         "name": build_field_schema(FieldType.kString, description="ROS topic 名称"),
+        "grep": build_field_schema(FieldType.kString, description="对 rostopic 输出执行 grep 过滤的关键字"),
         "timeout_seconds": build_field_schema(FieldType.kInt, description="采集超时", unit="s"),
     }
 
@@ -49,6 +50,7 @@ def execute_ros_topic_echo(params: ToolParams) -> ToolExecuteResult:
     tool = params.get("_tool")
     ssh_manager = params.get("_ssh_manager")
     topic_name = str(params.get("name", "") or "").strip()
+    grep_pattern = str(params.get("grep", "") or "").strip()
     timeout_seconds = _to_positive_int(params.get("timeout_seconds"), default=8)
 
     if not topic_name:
@@ -76,7 +78,7 @@ def execute_ros_topic_echo(params: ToolParams) -> ToolExecuteResult:
         )
 
     remote_command = build_rosbridge_remote_command(
-        _build_ros_topic_echo_command(topic_name, timeout_seconds),
+        _build_ros_topic_echo_command(topic_name, timeout_seconds, grep_pattern=grep_pattern),
         timeout_sec=timeout_seconds + 10,
     )
     command_result = ssh_manager.run_command(remote_command)
@@ -110,6 +112,7 @@ def execute_ros_topic_echo(params: ToolParams) -> ToolExecuteResult:
         status="completed" if command_result.success else "failed",
         facts={
             "topic": topic_name,
+            "grep": grep_pattern,
             "exit_code": int(command_result.exit_code),
         },
         summary=summary or f"topic {topic_name} 未返回可解析内容。",
@@ -128,14 +131,26 @@ def execute_ros_topic_echo(params: ToolParams) -> ToolExecuteResult:
     return result
 
 
-def _build_ros_topic_echo_command(topic_name: str, timeout_seconds: int) -> str:
+def _build_ros_topic_echo_command(topic_name: str, timeout_seconds: int, *, grep_pattern: str = "") -> str:
     topic = shlex.quote(topic_name)
-    return (
+    base_command = (
         "if ! command -v rostopic >/dev/null 2>&1; then "
         "echo '__RC_ERROR__=rostopic_not_found'; exit 0; "
         "fi; "
-        f"timeout {timeout_seconds}s rostopic echo -n 1 {topic} 2>&1"
+        f"OUTPUT=$(timeout {timeout_seconds}s rostopic echo -n 1 {topic} 2>&1); "
+        "STATUS=$?; "
+        "if [ \"$STATUS\" -ne 0 ]; then "
+        "printf '%s' \"$OUTPUT\"; "
+        "exit \"$STATUS\"; "
+        "fi; "
     )
+    if grep_pattern:
+        pattern = shlex.quote(grep_pattern)
+        return (
+            base_command
+            + f"printf '%s' \"$OUTPUT\" | grep -F -- {pattern} || true"
+        )
+    return base_command + "printf '%s' \"$OUTPUT\""
 
 
 def _to_positive_int(value: object, *, default: int) -> int:

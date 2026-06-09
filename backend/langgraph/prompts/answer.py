@@ -60,6 +60,9 @@ def build_fault_chat_system_prompt(tool_items: list[Any] | None = None) -> str:
     return (
         f"{FAULT_ANALYSIS_BASE_PROMPT}"
         "如果上文已经给出工具执行结果，请优先基于最新结果收敛结论，不要重复已经完成的检查。"
+        "工具返回里的 summary 只是摘要，不等于最终结论。"
+        "判断是否有数据、是否异常、是否恢复时，应优先查看 facts 和 raw_output，再决定结论是否成立。"
+        "如果现有工具结果还不足以支持明确结论，可以继续规划下一个工具；如果证据已经足够，就直接输出 final。"
         "如果对话历史里已经明确提到某个具体 topic、service、接口或对象，后续追问应优先沿用最近明确的对象。"
         f"{tool_notice}"
         f"{FAULT_CHAT_OUTPUT_PROTOCOL}"

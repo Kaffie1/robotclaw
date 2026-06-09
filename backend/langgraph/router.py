@@ -19,11 +19,6 @@ def route_after_match(state: ChatGraphState) -> str:
 
 
 def route_after_playbook_execution(state: ChatGraphState) -> str:
-    runtime_state = state["runtime_state"]
-    if runtime_state.current_step in {"waiting_confirm", "waiting_input"}:
-        return "finish"
-    if runtime_state.finished:
-        return "finish"
     return "summarize"
 
 
@@ -40,9 +35,9 @@ def route_after_interpret(state: ChatGraphState) -> str:
     result_kind = str(state.get("result_kind") or "").strip().lower()
     loop_count = int(state.get("model_loop_count") or 0)
     if result_kind in {"final", "clarify", "confirmation"}:
-        return "finish"
+        return "summarize"
     if loop_count >= 6:
-        return "finish"
+        return "summarize"
     if result_kind == "tool_call":
         return "call_tools"
     return "retry"
@@ -51,4 +46,6 @@ def route_after_interpret(state: ChatGraphState) -> str:
 def route_after_call_tools(state: ChatGraphState) -> str:
     if state.get("confirmation_request"):
         return "await_confirmation"
+    if str(state.get("tool_iteration_status") or "").strip().lower() == "duplicate_target_blocked":
+        return "summarize"
     return "call_model"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from backend.langgraph.nodes.confirm import await_confirmation_node
@@ -8,7 +9,10 @@ from backend.langgraph.prompts import build_fault_chat_system_prompt, build_know
 from backend.llm.models import LLMMessage
 from backend.llm.parser import extract_json_object
 from backend.runtime.models import EvidenceItem, RouteDecision
+from backend.shared import get_logger
 from backend.tools.models import build_tool_result_schema
+
+logger = get_logger("langgraph.answer")
 
 
 def build_messages_node(state: dict) -> dict:
@@ -196,12 +200,47 @@ def call_tools_node(state: dict) -> dict:
     runtime_state.current_step = "call_tools"
     tool_feedback_lines: list[str] = []
     all_results_payload: list[dict[str, Any]] = list(short_memory.tool_results)
+    seen_targets = set(short_memory.scratchpad.get("seen_tool_targets") or [])
+    tool_iteration_status = "completed"
+    analysis = None
 
     for command in pending_commands:
         tool_name = str(command.get("name") or command.get("tool_name") or "").strip()
         if not tool_name:
             continue
         tool_args = command.get("arguments") if isinstance(command.get("arguments"), dict) else {}
+        target_fingerprint = _build_target_fingerprint(tool_name, tool_args)
+        if target_fingerprint and target_fingerprint in seen_targets:
+            previous_summary = _find_latest_target_summary(all_results_payload, target_fingerprint)
+            user_summary = (
+                previous_summary
+                or f"{target_fingerprint} 已完成过一次检查，本轮不再重复执行，请以上一次检查结论为准。"
+            )
+            result_payload = {
+                "call_id": "",
+                "tool_name": tool_name,
+                "success": False,
+                "status": "rejected",
+                "summary": user_summary,
+                "facts": {"params": tool_args, "target": target_fingerprint},
+                "data": {"result_schema": build_tool_result_schema()},
+                "error": "duplicate_target_input",
+                "raw_output": "",
+            }
+            all_results_payload.append(result_payload)
+            tool_feedback_lines.append(_build_tool_feedback_message(tool_name, tool_args, result_payload))
+            tool_iteration_status = "duplicate_target_blocked"
+            analysis = {
+                "summary": user_summary,
+                "detail": "本轮不再重复执行同一检查；如需重新采集，请重新发起一次新的查询。",
+            }
+            logger.info(
+                "Tool target blocked tool=%s target=%s reason=duplicate",
+                tool_name,
+                target_fingerprint,
+            )
+            break
+
         planned_tools = tool_executor.plan(
             [tool_name],
             state["connected"],
@@ -224,10 +263,23 @@ def call_tools_node(state: dict) -> dict:
             tool_feedback_lines.append(_build_tool_feedback_message(tool_name, tool_args, result_payload))
             continue
 
+        planned_tools = [
+            {
+                **dict(item),
+                "params": dict(tool_args),
+            }
+            for item in planned_tools
+        ]
         runtime_state.planned_tools = planned_tools
         execution_results = tool_executor.execute(planned_tools, state["connected"])
         runtime_state.tool_results = execution_results
         payloads = tool_executor.to_payload(execution_results)
+        for payload in payloads:
+            if not isinstance(payload.get("facts"), dict):
+                payload["facts"] = {}
+            payload["facts"].setdefault("params", dict(tool_args))
+            if target_fingerprint:
+                payload["facts"].setdefault("target", target_fingerprint)
         all_results_payload.extend(payloads)
         for payload in payloads:
             tool_feedback_lines.append(
@@ -244,8 +296,18 @@ def call_tools_node(state: dict) -> dict:
                     confidence=0.75 if payload.get("success") else 0.45,
                 )
             )
+        if target_fingerprint:
+            seen_targets.add(target_fingerprint)
+            logger.info(
+                "Tool target recorded tool=%s target=%s",
+                tool_name,
+                target_fingerprint,
+            )
 
     short_memory.tool_results = all_results_payload
+    short_memory.scratchpad["seen_tool_targets"] = sorted(seen_targets)
+    if analysis is not None:
+        short_memory.scratchpad["analysis"] = analysis
     if tool_feedback_lines:
         messages.append(LLMMessage(role="user", content="\n\n".join(tool_feedback_lines)))
     runtime_state.trace.append(
@@ -262,6 +324,8 @@ def call_tools_node(state: dict) -> dict:
         "messages": messages,
         "pending_commands": [],
         "result_kind": "tool_result",
+        "tool_iteration_status": tool_iteration_status,
+        "analysis": analysis,
     }
 
 
@@ -355,11 +419,17 @@ def _normalize_command_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _build_tool_feedback_message(tool_name: str, tool_args: dict[str, Any], tool_result: dict[str, Any]) -> str:
+    facts = tool_result.get("facts") if isinstance(tool_result.get("facts"), dict) else {}
+    raw_output = _normalize_tool_raw_output(tool_result.get("raw_output"))
     return (
         "【工具执行结果】\n"
         f"工具: {tool_name}\n"
-        f"参数: {json.dumps(tool_args, ensure_ascii=False)}\n"
-        f"结果: {json.dumps(tool_result, ensure_ascii=False)}"
+        f"参数: {_pretty_json(tool_args)}\n"
+        f"执行状态: {str(tool_result.get('status') or '').strip() or 'unknown'}\n"
+        f"摘要: {str(tool_result.get('summary') or '').strip() or '无'}\n"
+        f"结构化事实: {_pretty_json(facts)}\n"
+        f"原始输出:\n{raw_output}\n"
+        "请基于结构化事实和原始输出判断当前证据是否足以支持结论，不要只复述摘要。"
     )
 
 
@@ -380,6 +450,30 @@ def _try_parse_json(content: str) -> dict[str, Any] | None:
         return extract_json_object(content)
     except Exception:
         return None
+
+
+def _build_target_fingerprint(tool_name: str, tool_args: dict[str, Any]) -> str:
+    normalized_tool = str(tool_name or "").strip()
+    if not isinstance(tool_args, dict):
+        return ""
+    for key, prefix in (
+        ("name", "name"),
+        ("topic", "topic"),
+        ("host", "host"),
+        ("service", "service"),
+    ):
+        value = str(tool_args.get(key) or "").strip()
+        if value:
+            return f"{prefix}:{value}"
+    command = str(tool_args.get("command") or "").strip()
+    if command:
+        topic_match = re.search(r"(/[\w/.-]+)", command)
+        if topic_match:
+            return f"command_target:{topic_match.group(1)}"
+        host_match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", command)
+        if host_match:
+            return f"command_host:{host_match.group(1)}"
+    return f"tool:{normalized_tool}:{json.dumps(tool_args, ensure_ascii=False, sort_keys=True)}"
 
 
 def _finish_with_answer(
@@ -409,3 +503,36 @@ def _finish_with_answer(
         "final_message": final_answer,
         "result_kind": result_kind,
     }
+
+
+def _find_latest_target_summary(tool_results: list[dict[str, Any]], target_fingerprint: str) -> str:
+    for item in reversed(tool_results):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("error") or "").strip() == "duplicate_target_input":
+            continue
+        facts = item.get("facts")
+        if not isinstance(facts, dict):
+            continue
+        if str(facts.get("target") or "").strip() != target_fingerprint:
+            continue
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            return summary
+    return ""
+
+
+def _pretty_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
+    except TypeError:
+        return json.dumps(str(value), ensure_ascii=False)
+
+
+def _normalize_tool_raw_output(raw_output: Any, *, limit: int = 2000) -> str:
+    text = str(raw_output or "").strip()
+    if not text:
+        return "(empty)"
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}\n...<truncated>"

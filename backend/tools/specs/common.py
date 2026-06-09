@@ -8,6 +8,7 @@ from backend.tools.models import Tool, ToolExecuteResult, ToolParams, build_tool
 
 ROSBRIDGE_PROJECT_DIR = "/home/naviai/navi_project"
 ROSBRIDGE_SERVICE_NAME = "rosbridge"
+ROSBRIDGE_SETUP_SCRIPT = "/opt/ros/noetic/setup.bash"
 
 
 def public_params(params: ToolParams) -> dict[str, object]:
@@ -72,9 +73,13 @@ def build_rosbridge_remote_command(
     project_dir: str = ROSBRIDGE_PROJECT_DIR,
     service_name: str = ROSBRIDGE_SERVICE_NAME,
 ) -> RemoteCommand:
+    shell_command = (
+        f"source {shlex.quote(ROSBRIDGE_SETUP_SCRIPT)} >/dev/null 2>&1; "
+        f"{str(inner_command or '').strip()}"
+    )
     wrapped = (
         f"docker compose exec -T {shlex.quote(service_name)} "
-        f"bash -lc {shlex.quote(str(inner_command or '').strip())}"
+        f"bash -lc {shlex.quote(shell_command)}"
     )
     return RemoteCommand(
         command=wrapped,

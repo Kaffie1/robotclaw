@@ -83,7 +83,6 @@ def build_chat_graph() -> Any:
         "playbook_execution",
         route_after_playbook_execution,
         {
-            "finish": END,
             "summarize": "summarize_response",
         },
     )
@@ -108,7 +107,7 @@ def build_chat_graph() -> Any:
         "interpret_output",
         route_after_interpret,
         {
-            "finish": END,
+            "summarize": "summarize_response",
             "retry": "call_model",
             "call_tools": "call_tools",
         },
@@ -118,10 +117,11 @@ def build_chat_graph() -> Any:
         route_after_call_tools,
         {
             "await_confirmation": "await_confirmation",
+            "summarize": "summarize_response",
             "call_model": "call_model",
         },
     )
-    graph.add_edge("await_confirmation", END)
+    graph.add_edge("await_confirmation", "summarize_response")
     return graph.compile()
 
 
@@ -288,8 +288,6 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
     next_node = route_after_match(state)
     if next_node == "playbook_execution" and _should_run("playbook_execution", start_node):
         state.update(_run_node("playbook_execution", enter_playbook_node, state))
-        if _is_terminal(state):
-            return state
         if route_after_playbook_execution(state) == "summarize" and _should_run("summarize_response", start_node):
             state.update(_run_node("summarize_response", summarize_response_node, state))
             return state
@@ -328,11 +326,11 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
                 return state
         if _should_run("interpret_output", start_node):
             state.update(_run_node("interpret_output", interpret_model_output_node, state))
-            if _is_terminal(state):
-                return state
 
         next_node = route_after_interpret(state)
-        if next_node == "finish":
+        if next_node == "summarize":
+            if _should_run("summarize_response", start_node):
+                state.update(_run_node("summarize_response", summarize_response_node, state))
             return state
         if next_node == "call_tools":
             if _should_run("call_tools", start_node):
@@ -343,6 +341,12 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
             if tool_next == "await_confirmation":
                 if _should_run("await_confirmation", start_node):
                     state.update(_run_node("await_confirmation", await_confirmation_node, state))
+                if _should_run("summarize_response", start_node):
+                    state.update(_run_node("summarize_response", summarize_response_node, state))
+                return state
+            if tool_next == "summarize":
+                if _should_run("summarize_response", start_node):
+                    state.update(_run_node("summarize_response", summarize_response_node, state))
                 return state
             continue
         if next_node != "retry":

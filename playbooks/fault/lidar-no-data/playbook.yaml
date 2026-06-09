@@ -64,6 +64,7 @@ playbooks:
           tool_name: ros_topic_echo
           arguments:
             name: /livox/lidar
+            grep: point_num
         - type: condition
           name: assert_lidar_point_num_recovered
           display_name: 判断激光点云是否恢复

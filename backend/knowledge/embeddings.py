@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from ..shared.config import (
     EMBEDDING_API_KEY,
     EMBEDDING_BASE_URL,
+    EMBEDDING_DEVICE,
     EMBEDDING_MODEL,
     EMBEDDING_PROVIDER,
 )
@@ -35,11 +36,23 @@ def _embedding_api_key() -> str:
     return EMBEDDING_API_KEY
 
 
+def _configured_embedding_device() -> str:
+    return str(EMBEDDING_DEVICE or "").strip().lower()
+
+
 def _embedding_device() -> str:
+    configured = _configured_embedding_device()
+    if configured and configured != "auto":
+        return configured
     try:
         import torch
     except ImportError:
         return "cpu"
+    try:
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
     try:
         if torch.backends.mps.is_available():
             return "mps"

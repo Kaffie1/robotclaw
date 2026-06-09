@@ -47,15 +47,15 @@ def compose_answer(
     planned_tool_count: int,
 ) -> str:
     lines = [analysis.get("summary", "").strip() or "当前已形成阶段性结论。"]
-    if analysis.get("detail", "").strip():
-        lines.append(analysis["detail"].strip())
-    if solutions:
-        lines.append("")
-        for solution in solutions:
-            lines.append(solution.detail)
+    detail = str(analysis.get("detail", "") or "").strip()
+    if _should_include_user_detail(detail):
+        lines.append(detail)
     elif planned_tool_count > 0 and not connected:
-        lines.append("")
         lines.append("当前需要先满足外部连接条件后再继续执行。")
+    elif solutions:
+        suggestion = _pick_user_visible_solution(solutions)
+        if suggestion:
+            lines.append(suggestion)
     return "\n".join(lines)
 
 
@@ -78,7 +78,28 @@ def summarize_response_node(state: dict) -> dict:
             "detail": str(knowledge.get("detail") or knowledge.get("context") or "").strip(),
         }
 
-    runtime_state.current_step = "solution_generation"
+    diagnosis.solutions = build_solutions(
+        connected=state["connected"],
+        robot_ref=envelope.robot_config.robot_ref,
+        host=envelope.robot_config.host,
+        analysis=analysis,
+        planned_tool_count=len(runtime_state.planned_tools),
+    )
+    waiting_mode = runtime_state.current_step in {"waiting_confirm", "waiting_input"}
+    seed_answer = str(diagnosis.final_answer or "").strip()
+    if not seed_answer and waiting_mode:
+        confirmation = short_memory.pending_confirmation or {}
+        seed_answer = str(confirmation.get("message") or analysis.get("summary") or "").strip()
+    if not seed_answer:
+        seed_answer = compose_answer(
+            analysis=analysis,
+            solutions=diagnosis.solutions,
+            connected=state["connected"],
+            planned_tool_count=len(runtime_state.planned_tools),
+        )
+
+    if not waiting_mode:
+        runtime_state.current_step = "solution_generation"
     prompt = state["build_summary_prompt"](
         request.content,
         knowledge_context=str(knowledge.get("context", "") or ""),
@@ -88,13 +109,6 @@ def summarize_response_node(state: dict) -> dict:
     short_memory.scratchpad["summary_prompt"] = prompt
     short_memory.scratchpad["summary_llm_attempted"] = False
     short_memory.scratchpad["summary_source"] = "fallback"
-    diagnosis.solutions = build_solutions(
-        connected=state["connected"],
-        robot_ref=envelope.robot_config.robot_ref,
-        host=envelope.robot_config.host,
-        analysis=analysis,
-        planned_tool_count=len(runtime_state.planned_tools),
-    )
     runtime_state.trace.append(
         RouteDecision(
             stage="解决方案生成",
@@ -105,19 +119,15 @@ def summarize_response_node(state: dict) -> dict:
     if _should_use_smalltalk(intent=intent, knowledge=knowledge, request_content=request.content):
         diagnosis.final_answer = _smalltalk_answer(state["get_llm_client"], request.content)
         short_memory.scratchpad["summary_source"] = "llm"
-        runtime_state.current_step = "completed"
-        runtime_state.finished = True
+        if not waiting_mode:
+            runtime_state.current_step = "completed"
+            runtime_state.finished = True
         return {
             "runtime_state": runtime_state,
             "diagnosis": diagnosis,
             "short_memory": short_memory,
         }
-    diagnosis.final_answer = compose_answer(
-        analysis=analysis,
-        solutions=diagnosis.solutions,
-        connected=state["connected"],
-        planned_tool_count=len(runtime_state.planned_tools),
-    )
+    diagnosis.final_answer = seed_answer
     try:
         short_memory.scratchpad["summary_llm_attempted"] = True
         response = state["get_llm_client"]().invoke_schema(
@@ -128,18 +138,22 @@ def summarize_response_node(state: dict) -> dict:
                 analysis=analysis,
                 solutions=diagnosis.solutions,
                 knowledge=knowledge,
+                seed_answer=seed_answer,
             ),
             schema_parser=parse_summary_output,
             metadata={"node": "summarize"},
         )
         short_memory.scratchpad["summary_result"] = response.parsed
-        if response.parsed["summary"]:
+        if response.parsed["summary"] and _is_summary_consistent(seed_answer=seed_answer, candidate=response.parsed["summary"]):
             diagnosis.final_answer = response.parsed["summary"]
             short_memory.scratchpad["summary_source"] = "llm"
+        elif response.parsed["summary"]:
+            short_memory.scratchpad["summary_source"] = "guarded_fallback"
     except Exception:
         pass
-    runtime_state.current_step = "completed"
-    runtime_state.finished = True
+    if not waiting_mode:
+        runtime_state.current_step = "completed"
+        runtime_state.finished = True
     return {
         "runtime_state": runtime_state,
         "diagnosis": diagnosis,
@@ -155,6 +169,7 @@ def _build_summary_request(
     analysis: dict[str, str],
     solutions: list[SolutionItem],
     knowledge: dict,
+    seed_answer: str,
 ) -> str:
     trace_text = "\n".join(f"- {item.stage}: {item.summary}" for item in trace)
     solution_text = "\n".join(f"- {item.detail}" for item in solutions)
@@ -165,17 +180,99 @@ def _build_summary_request(
         "请返回 JSON，字段包含 summary、evidence、next_steps。\n"
         "summary 只输出最终给客户看的说明，不要复述用户问题，不要展示诊断轨迹、阶段列表或排查过程。\n"
         "summary 要有明显结构感和逻辑顺序，优先按照“结论 -> 原因/现状 -> 建议”组织。\n"
+        "summary 第一段必须直接给结论，不能先讲执行过程、重复调用控制、系统拦截、节点流转或内部判断依据。\n"
         "summary 语言要通俗易懂，不要堆术语，不要写成内部排查报告。\n"
         "summary 如果需要分点，请使用非常自然的中文表达，让客户一眼就能看懂重点。\n"
+        "你只能润色和重组表达，不能改变原始结论方向，不能把失败说成成功，不能把异常说成正常，不能把未确认说成已确认。\n"
+        "如果原始结论是失败、异常、超时、未恢复、无法确认、等待处理，你的 summary 必须保持这个结论方向一致。\n"
+        "如果原始结论是成功、恢复、正常、已完成，你的 summary 也必须保持这个结论方向一致。\n"
+        "如果原始结论里已经带有可直接对外展示的判断，就沿用这个判断，不要把重点改写成排查经过。\n"
         "如果已经提供知识上下文，优先基于知识上下文回答，不要忽略命中的知识片段。\n"
         "如果需要给出下一步，请给出可执行、好理解的建议，不要只说笼统结论。\n"
         f"用户问题：{query}\n"
+        f"原始结论（只能润色，不能反转）：{seed_answer}\n"
         f"内部轨迹（不要直接展示给用户）：\n{trace_text}\n"
         f"内部分析结论：{analysis.get('summary', '')}\n"
         f"内部建议：\n{solution_text}\n"
         f"知识上下文：\n{knowledge_text}\n"
         f"引用信息：\n{citations_text}"
     )
+
+
+_NEGATIVE_MARKERS = (
+    "失败",
+    "异常",
+    "错误",
+    "超时",
+    "未恢复",
+    "没有",
+    "无",
+    "无法",
+    "不通",
+    "未找到",
+    "中断",
+    "挂起",
+    "等待",
+)
+
+_POSITIVE_MARKERS = (
+    "成功",
+    "正常",
+    "恢复",
+    "已恢复",
+    "已完成",
+    "可用",
+    "已连接",
+    "正常输出",
+)
+
+_POSITIVE_PHRASES = (
+    "未发现异常",
+    "连接正常",
+    "通道正常",
+    "状态正常",
+    "运行正常",
+)
+
+_NEGATIVE_PHRASES = (
+    "无法确认",
+    "连接异常",
+    "检查失败",
+    "未能恢复",
+    "没有数据",
+)
+
+_NEUTRAL_PHRASES = (
+    "是否正常",
+    "是否有数据",
+    "能否确认",
+)
+
+
+def _detect_conclusion_polarity(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return "unknown"
+    positive_hits = sum(1 for phrase in _POSITIVE_PHRASES if phrase in normalized)
+    negative_hits = sum(1 for phrase in _NEGATIVE_PHRASES if phrase in normalized)
+    scrubbed = normalized
+    for phrase in _POSITIVE_PHRASES + _NEGATIVE_PHRASES + _NEUTRAL_PHRASES:
+        scrubbed = scrubbed.replace(phrase, " ")
+    has_negative = negative_hits > 0 or any(marker in scrubbed for marker in _NEGATIVE_MARKERS)
+    has_positive = positive_hits > 0 or any(marker in scrubbed for marker in _POSITIVE_MARKERS)
+    if has_negative and not has_positive:
+        return "negative"
+    if has_positive and not has_negative:
+        return "positive"
+    return "unknown"
+
+
+def _is_summary_consistent(*, seed_answer: str, candidate: str) -> bool:
+    seed_polarity = _detect_conclusion_polarity(seed_answer)
+    candidate_polarity = _detect_conclusion_polarity(candidate)
+    if seed_polarity == "unknown" or candidate_polarity == "unknown":
+        return True
+    return seed_polarity == candidate_polarity
 
 
 def _is_smalltalk_intent(intent: dict) -> bool:
@@ -236,3 +333,32 @@ def _format_history(history: list[dict]) -> str:
         if role and content:
             lines.append(f"{role}: {content}")
     return "\n".join(lines)
+
+
+_PROCESS_DETAIL_MARKERS = (
+    "重复调用",
+    "重复检查",
+    "系统已阻止",
+    "收口总结",
+    "工具调用",
+    "内部",
+    "节点",
+    "轨迹",
+    "流程",
+    "本轮不再重复执行同一检查",
+)
+
+
+def _should_include_user_detail(detail: str) -> bool:
+    normalized = str(detail or "").strip()
+    if not normalized:
+        return False
+    return not any(marker in normalized for marker in _PROCESS_DETAIL_MARKERS)
+
+
+def _pick_user_visible_solution(solutions: list[SolutionItem]) -> str:
+    for solution in solutions:
+        detail = str(solution.detail or "").strip()
+        if detail:
+            return detail
+    return ""

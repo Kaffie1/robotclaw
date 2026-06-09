@@ -50,5 +50,6 @@ class ChatGraphState(TypedDict, total=False):
     parsed_response: dict[str, Any]
     pending_commands: list[dict[str, Any]]
     result_kind: str
+    tool_iteration_status: str
     final_message: str
     confirmation_request: ConfirmationRequest

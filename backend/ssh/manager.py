@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 from threading import Lock
+import time
 from typing import Any
 
 import paramiko
@@ -127,9 +128,11 @@ class SSHManager:
                 remote_command,
                 timeout=max(1, int(command.timeout_sec or 30)),
             )
-            exit_code = int(stdout.channel.recv_exit_status())
-            stdout_text = stdout.read().decode("utf-8", errors="replace")
-            stderr_text = stderr.read().decode("utf-8", errors="replace")
+            exit_code, stdout_text, stderr_text = self._collect_command_output(
+                stdout=stdout,
+                stderr=stderr,
+                timeout_sec=max(1, int(command.timeout_sec or 30)),
+            )
         except Exception as exc:
             logger.warning("SSH command failed command=%s error=%s", command.command, exc)
             return RemoteCommandResult(success=False, exit_code=-1, stderr=str(exc))
@@ -216,6 +219,37 @@ class SSHManager:
         except (TypeError, ValueError):
             port = 22
         return port if port > 0 else 22
+
+    def _collect_command_output(self, *, stdout, stderr, timeout_sec: int) -> tuple[int, str, str]:
+        channel = stdout.channel
+        deadline = time.monotonic() + max(1, timeout_sec)
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        while True:
+            while channel.recv_ready():
+                stdout_chunks.append(channel.recv(4096))
+            while channel.recv_stderr_ready():
+                stderr_chunks.append(channel.recv_stderr(4096))
+
+            if channel.exit_status_ready():
+                if not channel.recv_ready() and not channel.recv_stderr_ready():
+                    break
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"remote command timed out after {timeout_sec}s")
+
+            time.sleep(0.05)
+
+        exit_code = int(channel.recv_exit_status())
+        while channel.recv_ready():
+            stdout_chunks.append(channel.recv(4096))
+        while channel.recv_stderr_ready():
+            stderr_chunks.append(channel.recv_stderr(4096))
+
+        stdout_text = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        return exit_code, stdout_text, stderr_text
 
     def _wrap_command(self, command: RemoteCommand, config: RobotConnectionConfig) -> str:
         steps: list[str] = []
