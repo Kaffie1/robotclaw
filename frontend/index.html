@@ -46,8 +46,20 @@
                 <button class="icon-button sprite sprite-attach" type="button" title="附件"></button>
                 <button class="icon-button sprite sprite-command" type="button" title="命令"></button>
               </div>
-              <button class="send-button" id="sendButton" type="button" title="发送"></button>
+              <div class="composer-primary-actions">
+                <button class="voice-button" id="voiceButton" type="button" title="语音输入" aria-pressed="false">
+                  <span class="voice-button-ring"></span>
+                  <span class="voice-button-core">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 15.2a3.7 3.7 0 0 0 3.7-3.7V7.7A3.7 3.7 0 0 0 12 4a3.7 3.7 0 0 0-3.7 3.7v3.8a3.7 3.7 0 0 0 3.7 3.7Z"></path>
+                      <path d="M18.2 11.5a.9.9 0 1 0-1.8 0 4.4 4.4 0 0 1-8.8 0 .9.9 0 1 0-1.8 0 6.2 6.2 0 0 0 5.3 6.1v2.1H8.9a.9.9 0 0 0 0 1.8h6.2a.9.9 0 1 0 0-1.8h-2.2v-2.1a6.2 6.2 0 0 0 5.3-6.1Z"></path>
+                    </svg>
+                  </span>
+                </button>
+                <button class="send-button" id="sendButton" type="button" title="发送"></button>
+              </div>
             </div>
+            <div class="composer-status" id="composerStatus" hidden></div>
           </div>
         </section>
       </main>

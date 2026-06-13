@@ -4,7 +4,7 @@ __pycache__/
 .runtime/
 # .codex/
 .env
-
+asr/
 !data/.gitkeep
 doc/
 tests/

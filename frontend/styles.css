@@ -322,6 +322,12 @@ body {
   gap: 14px;
 }
 
+.composer-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .icon-button,
 .send-button {
   border: none;
@@ -335,9 +341,66 @@ body {
   opacity: 0.84;
 }
 
+.voice-button {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  flex: 0 0 56px;
+  box-shadow: 0 14px 28px rgba(106, 103, 245, 0.18);
+}
+
+.voice-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.voice-button-ring,
+.voice-button-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.voice-button-ring {
+  background: radial-gradient(circle, rgba(106, 103, 245, 0.14), rgba(106, 103, 245, 0.02));
+  transform: scale(0.94);
+}
+
+.voice-button-core {
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(127, 140, 255, 0.18), rgba(106, 103, 245, 0.14));
+}
+
+.voice-button-core svg {
+  width: 24px;
+  height: 24px;
+  fill: #6f72f7;
+}
+
+.voice-button.listening .voice-button-ring {
+  animation: voice-pulse 1.4s ease-in-out infinite;
+}
+
+.voice-button.listening .voice-button-core {
+  background: linear-gradient(135deg, #ff8a6b, #f05555);
+}
+
+.voice-button.listening .voice-button-core svg {
+  fill: white;
+}
+
 .send-button {
   width: 56px;
   height: 56px;
+  flex: 0 0 56px;
   border-radius: 50%;
   background-color: transparent;
   box-shadow: 0 14px 28px rgba(106, 103, 245, 0.18);
@@ -345,6 +408,33 @@ body {
   background-repeat: no-repeat;
   background-position: center;
   background-size: 34px 34px;
+}
+
+.composer-status {
+  margin-top: 10px;
+  color: #5d6692;
+  font-size: 0.9rem;
+}
+
+.composer-status.error {
+  color: #b44f4f;
+}
+
+@keyframes voice-pulse {
+  0% {
+    transform: scale(0.94);
+    opacity: 0.56;
+  }
+
+  50% {
+    transform: scale(1.2);
+    opacity: 0.2;
+  }
+
+  100% {
+    transform: scale(0.94);
+    opacity: 0.56;
+  }
 }
 
 .connection-panel {
@@ -701,5 +791,17 @@ body {
 
   .split-inputs {
     grid-template-columns: 1fr;
+  }
+
+  .composer-actions {
+    gap: 12px;
+  }
+
+  .composer-tools {
+    gap: 10px;
+  }
+
+  .composer-primary-actions {
+    gap: 10px;
   }
 }

@@ -30,9 +30,13 @@ class LLMRegistry:
                     "label": config.label,
                     "provider": config.provider,
                     "model": config.model,
+                    "asr_provider": config.asr_provider,
+                    "asr_model": config.asr_model,
+                    "asr_language": config.asr_language,
                     "temperature": config.temperature,
                     "max_tokens": config.max_tokens,
                     "timeout_seconds": config.timeout_seconds,
+                    "asr_timeout_seconds": config.asr_timeout_seconds,
                     "api_base": config.api_base,
                     "has_api_key": bool(config.api_key),
                     "active": config.profile_id == self._active_profile_id,
@@ -63,6 +67,8 @@ class LLMRegistry:
         return {
             "active_profile_id": active.profile_id,
             "active_model": active.model,
+            "active_asr_provider": active.asr_provider,
+            "active_asr_model": active.asr_model,
             "active_provider": active.provider,
             "profiles": self.list_profiles(),
         }

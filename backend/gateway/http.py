@@ -29,6 +29,9 @@ def build_handler(app: GatewayApplication):
             if parsed.path == "/api/llm/status":
                 self.send_json(app.llm_status())
                 return
+            if parsed.path == "/api/speech/status":
+                self.send_json(app.speech_status())
+                return
             if parsed.path == "/api/chat/history":
                 query = self.parse_query(parsed.query)
                 session_id = str(query.get("session_id", "")).strip()
@@ -51,6 +54,32 @@ def build_handler(app: GatewayApplication):
                         content=str(data.get("content", "")),
                     )
                     self.send_json(payload)
+                    return
+                if parsed.path == "/api/chat/voice/send":
+                    payload = app.send_voice_chat(
+                        session_id=str(data.get("session_id", "")).strip(),
+                        user_id=str(data.get("user_id", "u001")).strip() or "u001",
+                        audio_base64=str(data.get("audio_base64", "")),
+                        mime_type=str(data.get("mime_type", "")).strip(),
+                        filename=str(data.get("filename", "")).strip(),
+                        language=str(data.get("language", "")).strip(),
+                    )
+                    self.send_json(payload)
+                    return
+                if parsed.path == "/api/speech/transcribe":
+                    transcription = app.transcribe_audio(
+                        audio_base64=str(data.get("audio_base64", "")),
+                        mime_type=str(data.get("mime_type", "")).strip(),
+                        filename=str(data.get("filename", "")).strip(),
+                        language=str(data.get("language", "")).strip(),
+                    )
+                    self.send_json(
+                        {
+                            "text": transcription.text,
+                            "model": transcription.model,
+                            "raw": transcription.raw,
+                        }
+                    )
                     return
                 if parsed.path == "/api/chat/cancel":
                     self.send_json(

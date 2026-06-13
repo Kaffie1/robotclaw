@@ -38,3 +38,10 @@ class StructuredLLMResponse:
     parsed: dict[str, Any]
     finish_reason: str = "stop"
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AudioTranscriptionResponse:
+    model: str
+    text: str
+    raw: dict[str, Any] = field(default_factory=dict)

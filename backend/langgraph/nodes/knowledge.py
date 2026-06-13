@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from backend.langgraph.prompts.execution_mode import build_execution_mode_prompt
 from langchain_core.documents import Document
 
 from backend.knowledge import (
@@ -13,61 +14,12 @@ from backend.knowledge import (
     retrieve_vector_documents,
     select_evidence,
 )
+from backend.llm import parse_execution_mode_output
 from backend.runtime.models import EvidenceItem, RouteDecision
 from backend.shared import TOP_K, get_logger
 
 
 logger = get_logger("langgraph.knowledge")
-
-ANSWER_HINT_KEYWORDS = {
-    "代码",
-    "示例",
-    "例子",
-    "接口",
-    "参数",
-    "定义",
-    "文档",
-    "说明",
-    "怎么调用",
-    "如何调用",
-    "调用方式",
-    "建图",
-    "slam",
-    "mapping",
-}
-
-ACT_HINT_KEYWORDS = {
-    "帮我检查",
-    "帮我看",
-    "帮我执行",
-    "帮我调用",
-    "帮我确认",
-    "现在",
-    "当前",
-    "机器人上",
-    "是否有",
-    "有没有",
-    "查一下",
-    "排查",
-    "恢复",
-    "重启",
-    "执行一下",
-}
-
-FAULT_HINT_KEYWORDS = {
-    "报错",
-    "失败",
-    "异常",
-    "不通",
-    "没数据",
-    "没有数据",
-    "无数据",
-    "无法",
-    "起不来",
-    "连不上",
-    "故障",
-}
-
 
 def retrieve_knowledge(knowledge_service, query: str, topic: str) -> dict[str, object]:
     del knowledge_service
@@ -275,14 +227,59 @@ def assemble_knowledge_context_node(state: dict) -> dict:
 def decide_knowledge_response_mode_node(state: dict) -> dict:
     runtime_state = state["runtime_state"]
     short_memory = state["short_memory"]
-    query = str(state["request"].content or "").strip().lower()
-    response_mode = _detect_response_mode(query)
+    query = str(state["request"].content or "").strip()
+    knowledge = state.get("knowledge") or short_memory.scratchpad.get("knowledge") or {}
+    history_text = _format_history(state.get("conversation_history") or [])
+    response_mode = "answer"
+    summary = "当前使用知识直答模式"
+    detail = "response_mode=answer"
+    prompt = build_execution_mode_prompt(
+        query,
+        knowledge_context=str(knowledge.get("context", "") or ""),
+        history_text=history_text,
+        connected=bool(state.get("connected", False)),
+    )
+    try:
+        response = state["get_llm_client"]().invoke_schema(
+            prompt=prompt,
+            schema_parser=parse_execution_mode_output,
+            metadata={"node": "decide_execution_mode"},
+        )
+        response_mode = response.parsed["mode"]
+        summary = (
+            "当前使用知识直答模式"
+            if response_mode == "answer"
+            else "当前允许进入动作/排查模式" if response_mode == "act" else "当前建议先澄清问题"
+        )
+        detail = str(response.parsed.get("detail") or f"response_mode={response_mode}")
+        short_memory.scratchpad["execution_mode_source"] = "llm"
+        short_memory.scratchpad["execution_mode_result"] = response.parsed
+    except Exception:
+        short_memory.scratchpad["execution_mode_source"] = "fallback"
+        short_memory.scratchpad["execution_mode_result"] = {
+            "mode": response_mode,
+            "summary": summary,
+            "detail": detail,
+        }
+        logger.warning(
+            "知识执行模式 Decision fallback | mode=%s | query=%s",
+            response_mode,
+            query[:80],
+        )
+    logger.info(
+        "知识执行模式 Decision | source=%s | mode=%s | summary=%s | detail=%s | query=%s",
+        short_memory.scratchpad.get("execution_mode_source", "unknown"),
+        response_mode,
+        summary[:80],
+        detail[:160],
+        query[:80],
+    )
     short_memory.scratchpad["response_mode"] = response_mode
     runtime_state.trace.append(
         RouteDecision(
             stage="知识回答模式",
-            summary="当前使用知识直答模式" if response_mode == "answer" else "当前允许进入动作/排查模式",
-            detail=f"response_mode={response_mode}",
+            summary=summary,
+            detail=detail,
         )
     )
     return {
@@ -331,13 +328,13 @@ def _used_channels(*, faq_docs: list[Document], bm25_docs: list[Document], vecto
     return channels
 
 
-def _detect_response_mode(query: str) -> str:
-    if not query:
-        return "answer"
-    if any(keyword in query for keyword in ACT_HINT_KEYWORDS):
-        return "act"
-    if any(keyword in query for keyword in FAULT_HINT_KEYWORDS):
-        return "act"
-    if any(keyword in query for keyword in ANSWER_HINT_KEYWORDS):
-        return "answer"
-    return "answer"
+def _format_history(history: list[dict[str, str]]) -> str:
+    lines: list[str] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role and content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)

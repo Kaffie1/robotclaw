@@ -18,6 +18,13 @@ class ClassifyOutput:
 
 
 @dataclass
+class ExecutionModeOutput:
+    mode: str
+    summary: str
+    detail: str
+
+
+@dataclass
 class ToolPlanItem:
     tool_name: str
     reason: str

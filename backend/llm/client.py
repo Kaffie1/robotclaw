@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import mimetypes
 import re
+import uuid
+from urllib import error, request
 from typing import Any, Protocol
 
 from backend.llm.config import LLMConfig, load_llm_config
-from backend.llm.models import LLMMessage, LLMRequest, LLMResponse, StructuredLLMResponse
+from backend.llm.models import AudioTranscriptionResponse, LLMMessage, LLMRequest, LLMResponse, StructuredLLMResponse
 from backend.llm.parser import extract_json_object, to_payload
+from backend.llm.volc_asr import load_volc_asr_config, transcribe_audio_bytes
 from backend.shared.config import OPENAI_ENABLE_REASONING_SPLIT, OPENAI_THINK
 from backend.shared import get_logger
 
@@ -175,6 +180,100 @@ class LLMClient:
             raw=response.raw,
         )
 
+    def transcribe_audio(
+        self,
+        *,
+        audio_bytes: bytes,
+        filename: str = "audio.webm",
+        mime_type: str = "audio/webm",
+        language: str | None = None,
+        model: str | None = None,
+        prompt: str = "",
+    ) -> AudioTranscriptionResponse:
+        if not audio_bytes:
+            raise ValueError("audio_bytes 不能为空")
+        if self.config.asr_provider == "volcengine":
+            response = asyncio.run(
+                transcribe_audio_bytes(
+                    audio_bytes=audio_bytes,
+                    mime_type=mime_type,
+                    filename=filename,
+                    config=load_volc_asr_config(),
+                    language=language,
+                )
+            )
+            return AudioTranscriptionResponse(
+                model=str(response.get("model", "bigmodel")),
+                text=str(response.get("text", "")).strip(),
+                raw=dict(response.get("raw", {}) or {}),
+            )
+        if self.config.asr_provider not in {"openai", "openai_compatible"}:
+            raise ValueError(f"不支持的 ASR provider: {self.config.asr_provider}")
+        api_base = (self.config.api_base or "").rstrip("/")
+        if not api_base:
+            raise ValueError("openai provider 缺少 api_base 配置")
+        if not self.config.api_key:
+            raise ValueError("openai provider 缺少 api_key 配置")
+        selected_model = (model or self.config.asr_model or "").strip()
+        if not selected_model:
+            raise ValueError("ASR 未配置 model")
+
+        boundary = f"----RobotClawASR{uuid.uuid4().hex}"
+        body = _build_multipart_form_data(
+            boundary=boundary,
+            fields={
+                "model": selected_model,
+                "language": (language or self.config.asr_language or "").strip(),
+                "prompt": prompt.strip(),
+                "response_format": "json",
+            },
+            file_field_name="file",
+            filename=filename or _guess_filename(mime_type),
+            file_bytes=audio_bytes,
+            mime_type=mime_type or "application/octet-stream",
+        )
+        logger.info(
+            "LLM transcribe input provider=%s profile_id=%s model=%s filename=%s mime_type=%s bytes=%s",
+            self.config.provider,
+            self.config.profile_id,
+            selected_model,
+            filename,
+            mime_type,
+            len(audio_bytes),
+        )
+        req = request.Request(
+            api_base + "/audio/transcriptions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=self.config.asr_timeout_seconds) as response:
+                raw_bytes = response.read()
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            logger.warning("LLM transcribe HTTP error code=%s detail=%s", exc.code, detail[:300])
+            raise ValueError("ASR 接口调用失败") from exc
+        except error.URLError as exc:
+            logger.warning("LLM transcribe network error reason=%s", exc.reason)
+            raise ValueError("ASR 接口不可达，请检查网络或 api_base 配置") from exc
+
+        payload = json.loads(raw_bytes.decode("utf-8"))
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            raise ValueError("ASR 接口未返回 text")
+        logger.info(
+            "LLM transcribe output provider=%s profile_id=%s model=%s text=%s",
+            self.config.provider,
+            self.config.profile_id,
+            selected_model,
+            _clip_text(text),
+        )
+        return AudioTranscriptionResponse(model=selected_model, text=text, raw=payload)
+
     def _build_backend(self, config: LLMConfig) -> LLMBackend:
         if config.provider in {"openai", "openai_compatible"}:
             return ChatOpenAIBackend(config)
@@ -253,3 +352,37 @@ def _summarize_messages(messages: list[LLMMessage]) -> list[dict[str, str]]:
         }
         for message in messages
     ]
+
+
+def _build_multipart_form_data(
+    *,
+    boundary: str,
+    fields: dict[str, str],
+    file_field_name: str,
+    filename: str,
+    file_bytes: bytes,
+    mime_type: str,
+) -> bytes:
+    body = bytearray()
+    for key, value in fields.items():
+        if not str(value or "").strip():
+            continue
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+        body.extend(str(value).encode("utf-8"))
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(
+        f'Content-Disposition: form-data; name="{file_field_name}"; filename="{filename}"\r\n'.encode("utf-8")
+    )
+    body.extend(f"Content-Type: {mime_type}\r\n\r\n".encode("utf-8"))
+    body.extend(file_bytes)
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    return bytes(body)
+
+
+def _guess_filename(mime_type: str) -> str:
+    guessed_extension = mimetypes.guess_extension(mime_type or "") or ".bin"
+    return f"audio{guessed_extension}"

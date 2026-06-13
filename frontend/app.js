@@ -7,9 +7,18 @@ const state = {
     host: "",
     port: 22,
   },
+  speech: {
+    asr_enabled: false,
+    auto_send: true,
+  },
 };
 
 let pendingMessageId = 0;
+let mediaRecorder = null;
+let recordingStream = null;
+let recordingChunks = [];
+let isRecording = false;
+let isVoiceBusy = false;
 
 const refs = {
   sessionList: document.getElementById("sessionList"),
@@ -28,6 +37,8 @@ const refs = {
   passwordToggle: document.getElementById("passwordToggle"),
   connectionForm: document.getElementById("connectionForm"),
   disconnectButton: document.getElementById("disconnectButton"),
+  voiceButton: document.getElementById("voiceButton"),
+  composerStatus: document.getElementById("composerStatus"),
 };
 
 async function request(path, options = {}) {
@@ -114,6 +125,7 @@ function renderAll() {
   renderSessions();
   renderMessages();
   renderConnection();
+  renderVoiceState();
 }
 
 function upsertSession(session) {
@@ -207,18 +219,53 @@ async function bootstrap() {
   state.sessions = data.sessions || [];
   state.activeSessionId = data.active_session_id || state.sessions[0]?.id || "";
   state.connection = data.connection || state.connection;
+  state.speech = data.speech || state.speech;
   renderAll();
+}
+
+function renderVoiceState() {
+  const supported = Boolean(navigator.mediaDevices?.getUserMedia) && typeof window.MediaRecorder !== "undefined";
+  refs.voiceButton.disabled = !supported || isVoiceBusy;
+  refs.voiceButton.classList.toggle("listening", isRecording);
+  refs.voiceButton.setAttribute("aria-pressed", String(isRecording));
+  refs.voiceButton.title = !supported
+    ? "当前浏览器不支持录音"
+    : !state.speech.asr_enabled
+      ? "ASR 未配置"
+      : isRecording
+        ? "停止录音并发送"
+        : isVoiceBusy
+          ? "语音处理中"
+          : "开始语音输入";
+}
+
+function setComposerStatus(text = "", tone = "") {
+  const content = String(text || "").trim();
+  refs.composerStatus.hidden = !content;
+  refs.composerStatus.textContent = content;
+  refs.composerStatus.classList.toggle("error", tone === "error");
 }
 
 async function sendMessage() {
   const content = refs.messageInput.value.trim();
   if (!content) return;
-
-  const session = ensureSessionForSending();
-  const pendingId = appendOptimisticMessages(session.id, content);
   refs.messageInput.value = "";
+  await sendChatPayload({
+    previewContent: content,
+    requestPath: "/api/chat/send",
+    requestBody: {
+      content,
+    },
+  });
+}
+
+async function sendChatPayload({ previewContent, requestPath, requestBody }) {
+  const session = ensureSessionForSending();
+  const pendingId = appendOptimisticMessages(session.id, previewContent);
+  setComposerStatus("");
   renderAll();
   refs.sendButton.disabled = true;
+  refs.voiceButton.disabled = true;
   try {
     if (String(session.id).startsWith("draft-")) {
       const created = await request("/api/sessions", {
@@ -229,30 +276,32 @@ async function sendMessage() {
       state.sessions = state.sessions.filter((item) => item.id !== session.id);
       upsertSession(created.session);
       promoteSession(state.activeSessionId);
-      appendOptimisticMessages(state.activeSessionId, content);
+      appendOptimisticMessages(state.activeSessionId, previewContent);
       renderAll();
     }
 
-    const data = await request("/api/chat/send", {
+    const data = await request(requestPath, {
       method: "POST",
       body: JSON.stringify({
         session_id: state.activeSessionId,
-        content,
+        ...requestBody,
       }),
     });
     state.activeSessionId = data.active_session_id;
     upsertSession(data.session);
     promoteSession(state.activeSessionId);
     renderAll();
+    return data;
   } catch (error) {
     const current = activeSession();
     if (current) {
       finalizePendingMessagesWithError(current.id, pendingId, error.message || "请求失败");
     }
     renderAll();
-    window.alert(error.message);
+    throw error;
   } finally {
     refs.sendButton.disabled = false;
+    renderVoiceState();
   }
 }
 
@@ -313,11 +362,148 @@ function togglePasswordVisibility() {
   refs.passwordToggle.setAttribute("aria-label", isVisible ? "显示密码" : "隐藏密码");
 }
 
+async function toggleVoiceRecording() {
+  if (isVoiceBusy) return;
+  if (isRecording) {
+    stopVoiceRecording();
+    return;
+  }
+  try {
+    if (!state.speech.asr_enabled) {
+      throw new Error("ASR 尚未配置");
+    }
+    await startVoiceRecording();
+  } catch (error) {
+    setComposerStatus(error.message || "无法启动录音", "error");
+    renderVoiceState();
+  }
+}
+
+async function startVoiceRecording() {
+  if (!navigator.mediaDevices?.getUserMedia || typeof window.MediaRecorder === "undefined") {
+    throw new Error("当前浏览器不支持录音");
+  }
+  recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  recordingChunks = [];
+  mediaRecorder = new MediaRecorder(recordingStream);
+  mediaRecorder.addEventListener("dataavailable", (event) => {
+    if (event.data && event.data.size > 0) {
+      recordingChunks.push(event.data);
+    }
+  });
+  mediaRecorder.addEventListener("stop", handleRecordingStop, { once: true });
+  mediaRecorder.start();
+  isRecording = true;
+  setComposerStatus("录音中，再点一次麦克风发送");
+  renderVoiceState();
+}
+
+function stopVoiceRecording() {
+  if (!mediaRecorder || !isRecording) return;
+  isRecording = false;
+  isVoiceBusy = true;
+  setComposerStatus("正在上传语音...");
+  renderVoiceState();
+  mediaRecorder.stop();
+}
+
+async function handleRecordingStop() {
+  const recorder = mediaRecorder;
+  const stream = recordingStream;
+  mediaRecorder = null;
+  recordingStream = null;
+  if (stream) {
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+  }
+
+  try {
+    const mimeType = recorder?.mimeType || "audio/webm";
+    const blob = new Blob(recordingChunks, { type: mimeType });
+    recordingChunks = [];
+    if (!blob.size) {
+      throw new Error("没有录到音频");
+    }
+    setComposerStatus("正在转写语音...");
+    const transcription = await transcribeVoiceBlob(blob, mimeType);
+    const content = String(transcription.text || "").trim();
+    if (!content) {
+      throw new Error("语音转写结果为空");
+    }
+    refs.messageInput.value = content;
+    if (state.speech.auto_send) {
+      setComposerStatus("语音已转成文字，正在发送...");
+      await sendChatPayload({
+        previewContent: content,
+        requestPath: "/api/chat/send",
+        requestBody: {
+          content,
+        },
+      });
+      refs.messageInput.value = "";
+      setComposerStatus("语音已发送");
+    } else {
+      setComposerStatus("语音已转成文字，点击发送即可提问");
+    }
+    refs.messageInput.focus();
+    refs.messageInput.setSelectionRange(refs.messageInput.value.length, refs.messageInput.value.length);
+    window.setTimeout(() => {
+      if (!isRecording && !isVoiceBusy) {
+        setComposerStatus("");
+      }
+    }, 1600);
+  } catch (error) {
+    setComposerStatus(error.message || "语音发送失败", "error");
+    const message = error.message || "语音发送失败";
+    window.alert(message);
+  } finally {
+    recordingChunks = [];
+    isVoiceBusy = false;
+    renderVoiceState();
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const base64 = result.includes(",") ? result.split(",", 2)[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("音频编码失败"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function transcribeVoiceBlob(blob, mimeType) {
+  const audioBase64 = await blobToBase64(blob);
+  return request("/api/speech/transcribe", {
+    method: "POST",
+    body: JSON.stringify({
+      audio_base64: audioBase64,
+      mime_type: mimeType,
+      filename: defaultVoiceFilename(mimeType),
+    }),
+  });
+}
+
+function defaultVoiceFilename(mimeType) {
+  const normalized = String(mimeType || "").toLowerCase();
+  if (normalized.includes("ogg")) return "voice.ogg";
+  if (normalized.includes("mp4")) return "voice.m4a";
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return "voice.mp3";
+  if (normalized.includes("wav")) return "voice.wav";
+  return "voice.webm";
+}
+
 refs.sendButton.addEventListener("click", sendMessage);
 refs.newSessionButton.addEventListener("click", createSession);
 refs.connectionForm.addEventListener("submit", connectRobot);
 refs.disconnectButton.addEventListener("click", disconnectRobot);
 refs.passwordToggle.addEventListener("click", togglePasswordVisibility);
+refs.voiceButton.addEventListener("click", toggleVoiceRecording);
 refs.messageInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();

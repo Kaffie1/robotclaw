@@ -5,7 +5,14 @@ import re
 from dataclasses import asdict, is_dataclass
 from typing import Any, TypeVar
 
-from backend.llm.schemas import ClassifyOutput, RouteOutput, SummaryOutput, ToolPlanItem, ToolPlanOutput
+from backend.llm.schemas import (
+    ClassifyOutput,
+    ExecutionModeOutput,
+    RouteOutput,
+    SummaryOutput,
+    ToolPlanItem,
+    ToolPlanOutput,
+)
 
 
 T = TypeVar("T")
@@ -47,6 +54,17 @@ def parse_classify_output(payload: dict[str, Any]) -> ClassifyOutput:
         category=category,
         summary=str(payload.get("summary", "")).strip() or "已完成通用问题理解",
         detail=str(payload.get("detail", "")).strip() or "当前先走通用聊天诊断链路。",
+    )
+
+
+def parse_execution_mode_output(payload: dict[str, Any]) -> ExecutionModeOutput:
+    mode = str(payload.get("mode", "")).strip().lower() or "answer"
+    if mode not in {"answer", "act", "clarify"}:
+        mode = "answer"
+    return ExecutionModeOutput(
+        mode=mode,
+        summary=str(payload.get("summary", "")).strip() or "已完成执行意图判断",
+        detail=str(payload.get("detail", "")).strip() or f"当前按 {mode} 模式处理。",
     )
 
 

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from pathlib import Path
 
+from backend.llm import AudioTranscriptionResponse
+from backend.llm.volc_asr import load_volc_asr_config
 from backend.gateway.models import ChatRequest
 from backend.runtime.models import DiagnosisSummary, RuntimeEnvelope
 from backend.memory import MemoryManager
 from backend.runtime import RuntimeService
 from backend.session import SessionManager
 from backend.shared import get_logger, load_env_file
+from backend.shared.config import SPEECH_AUTO_SEND
 from backend.ssh import RobotConnectionConfig, SSHManager
 from backend.tools import ToolExecutor
 
@@ -32,6 +37,7 @@ class GatewayApplication:
         payload = self.session_manager.bootstrap_payload()
         payload["connection"] = self.ssh_manager.ui_payload()
         payload["llm"] = self.runtime.llm_status()
+        payload["speech"] = self.speech_status()
         return payload
 
     def create_session(self, user_id: str) -> dict:
@@ -42,6 +48,32 @@ class GatewayApplication:
         logger.info("Received chat request session_id=%s user_id=%s", session_id, user_id)
         request = self.runtime.build_request(session_id=session_id, user_id=user_id, content=content)
         return self._run_chat(session_id=session_id, request=request)
+
+    def send_voice_chat(
+        self,
+        session_id: str,
+        user_id: str,
+        *,
+        audio_base64: str = "",
+        mime_type: str = "",
+        filename: str = "",
+        language: str = "",
+    ) -> dict:
+        transcription = self.transcribe_audio(
+            audio_base64=audio_base64,
+            mime_type=mime_type,
+            filename=filename,
+            language=language,
+        )
+        content = transcription.text.strip()
+        logger.info("Received voice chat request session_id=%s user_id=%s", session_id, user_id)
+        request = self.runtime.build_request(session_id=session_id, user_id=user_id, content=content)
+        payload = self._run_chat(session_id=session_id, request=request)
+        payload["transcript"] = {
+            "text": transcription.text,
+            "model": transcription.model,
+        }
+        return payload
 
     def resume_chat(self, session_id: str, task_id: str, token: str, user_id: str = "u001") -> dict:
         logger.info("Resuming chat session_id=%s task_id=%s user_id=%s", session_id, task_id, user_id)
@@ -79,6 +111,61 @@ class GatewayApplication:
     def llm_status(self) -> dict:
         return self.runtime.llm_status()
 
+    def speech_status(self) -> dict:
+        config = self.runtime.llm_registry.get_active_config()
+        display_model = config.asr_model
+        display_language = config.asr_language
+        display_endpoint = config.api_base
+        has_api_key = bool(config.api_key)
+        asr_enabled = False
+        if config.asr_provider == "volcengine":
+            volc_config = load_volc_asr_config()
+            display_model = volc_config.asr_model
+            display_language = volc_config.language
+            display_endpoint = volc_config.ws_url
+            has_api_key = bool(volc_config.api_key or volc_config.access_key)
+            asr_enabled = bool(
+                volc_config.ws_url
+                and volc_config.resource_id
+                and (volc_config.api_key or (volc_config.app_key and volc_config.access_key))
+            )
+        else:
+            asr_enabled = bool(config.asr_model and config.api_base and config.api_key)
+        return {
+            "asr_enabled": asr_enabled,
+            "auto_send": SPEECH_AUTO_SEND,
+            "provider": config.asr_provider,
+            "model": display_model,
+            "language": display_language,
+            "has_api_key": has_api_key,
+            "api_base": display_endpoint,
+        }
+
+    def transcribe_audio(
+        self,
+        *,
+        audio_base64: str,
+        mime_type: str = "",
+        filename: str = "",
+        language: str = "",
+    ) -> AudioTranscriptionResponse:
+        audio_bytes = self._decode_audio_base64(audio_base64)
+        effective_mime_type = mime_type.strip() or "audio/webm"
+        effective_filename = filename.strip() or self._default_audio_filename(effective_mime_type)
+        llm_client = self.runtime.llm_registry.get_active_client()
+        try:
+            return llm_client.transcribe_audio(
+                audio_bytes=audio_bytes,
+                filename=effective_filename,
+                mime_type=effective_mime_type,
+                language=language.strip() or None,
+            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.exception("ASR failed mime_type=%s filename=%s", effective_mime_type, effective_filename)
+            raise ValueError("ASR 转写失败") from exc
+
     def activate_llm_profile(self, profile_id: str) -> dict:
         logger.info("Activating llm profile profile_id=%s", profile_id)
         return self.runtime.activate_llm_profile(profile_id=profile_id)
@@ -100,11 +187,14 @@ class GatewayApplication:
             diagnosis=DiagnosisSummary(),
             robot_config=self.ssh_manager.current_config(),
         )
-        _state, _diagnosis, response = self.runtime.run(
-            envelope=envelope,
-            request=request,
-            connected=self.ssh_manager.current_state().connected,
-        )
+        try:
+            _state, _diagnosis, response = self.runtime.run(
+                envelope=envelope,
+                request=request,
+                connected=self.ssh_manager.current_state().connected,
+            )
+        except Exception as exc:
+            raise ValueError(self._user_facing_runtime_error(exc)) from exc
         logger.info(
             "Chat finished session_id=%s task_id=%s status=%s current_step=%s",
             session_id,
@@ -177,3 +267,38 @@ class GatewayApplication:
         except (TypeError, ValueError):
             port = 22
         return port if port > 0 else 22
+
+    def _decode_audio_base64(self, value: str) -> bytes:
+        encoded = str(value or "").strip()
+        if not encoded:
+            raise ValueError("audio_base64 不能为空")
+        if "," in encoded and encoded.lower().startswith("data:"):
+            encoded = encoded.split(",", 1)[1]
+        try:
+            audio_bytes = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("audio_base64 非法") from exc
+        if not audio_bytes:
+            raise ValueError("音频数据为空")
+        return audio_bytes
+
+    def _default_audio_filename(self, mime_type: str) -> str:
+        normalized = mime_type.strip().lower()
+        if normalized == "audio/wav":
+            return "audio.wav"
+        if normalized == "audio/mp3" or normalized == "audio/mpeg":
+            return "audio.mp3"
+        if normalized == "audio/mp4":
+            return "audio.m4a"
+        if normalized == "audio/ogg":
+            return "audio.ogg"
+        return "audio.webm"
+
+    def _user_facing_runtime_error(self, exc: Exception) -> str:
+        message = str(exc).strip()
+        normalized = message.lower()
+        if "rate_limit" in normalized or "429" in normalized or "用量上限" in message:
+            return "当前聊天模型额度已用尽，请更换可用模型或充值后重试"
+        if message:
+            return f"聊天调用失败：{message}"
+        return "聊天调用失败，请稍后重试"

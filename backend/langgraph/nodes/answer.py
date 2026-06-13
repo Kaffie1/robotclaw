@@ -359,7 +359,13 @@ def _build_user_prompt(*, query: str, response_mode: str, knowledge: dict[str, A
             parts.append(f"知识上下文：\n{context}")
         if citations:
             parts.append(f"参考引用：\n{citations}")
-        parts.append("请基于以上知识直接回答用户，必要时给出最小可用代码或接口示例。")
+        parts.append(
+            "请基于以上知识直接回答用户。"
+            "历史对话可用于承接上一轮已经确认的结论和上下文。"
+            "如果涉及 ROS / shell / docker 命令、topic、service、参数，请只使用知识上下文里明确出现的原文；"
+            "如果上下文没有完整命令，就明确说明文档未提供完整命令。"
+            "必要时给出最小可用代码或接口示例，但示例中的接口名、参数名也必须来自知识上下文。"
+        )
         return "\n\n".join(parts)
 
     playbook_summary = str(playbook.get("summary") or "").strip()

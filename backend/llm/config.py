@@ -1,8 +1,30 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
+
+from backend.shared.config import (
+    LLM_ACTIVE_PROFILE,
+    LLM_API_BASE,
+    LLM_API_KEY,
+    LLM_ASR_LANGUAGE,
+    LLM_ASR_MODEL,
+    LLM_ASR_PROVIDER,
+    LLM_ASR_TIMEOUT,
+    LLM_MAX_TOKENS,
+    LLM_MODEL,
+    LLM_PROFILES,
+    LLM_PROVIDER,
+    LLM_TEMPERATURE,
+    LLM_TIMEOUT,
+    OPENAI_API_KEY,
+    OPENAI_ASR_MODEL,
+    OPENAI_BASE_URL,
+    OPENAI_CHAT_MODEL,
+    VOLCENGINE_ASR_ACCESS_KEY,
+    VOLCENGINE_ASR_API_KEY,
+    VOLCENGINE_ASR_WS_URL,
+)
 
 
 @dataclass(frozen=True)
@@ -11,9 +33,13 @@ class LLMConfig:
     label: str = "Default"
     provider: str = "openai"
     model: str = ""
+    asr_provider: str = "openai"
+    asr_model: str = ""
+    asr_language: str = "zh"
     temperature: float = 0.0
     max_tokens: int = 1024
     timeout_seconds: float = 30.0
+    asr_timeout_seconds: float = 60.0
     api_base: str = ""
     api_key: str = ""
 
@@ -22,25 +48,29 @@ def load_llm_config() -> LLMConfig:
     return LLMConfig(
         profile_id="default",
         label="Default",
-        provider=os.getenv("ROBOTCLAW_LLM_PROVIDER", "openai").strip() or "openai",
-        model=os.getenv("ROBOTCLAW_LLM_MODEL", "").strip(),
-        temperature=float(os.getenv("ROBOTCLAW_LLM_TEMPERATURE", "0") or "0"),
-        max_tokens=int(os.getenv("ROBOTCLAW_LLM_MAX_TOKENS", "1024") or "1024"),
-        timeout_seconds=float(os.getenv("ROBOTCLAW_LLM_TIMEOUT", "30") or "30"),
-        api_base=os.getenv("ROBOTCLAW_LLM_API_BASE", "").strip(),
-        api_key=os.getenv("ROBOTCLAW_LLM_API_KEY", "").strip(),
+        provider=LLM_PROVIDER,
+        model=LLM_MODEL,
+        asr_provider=_default_asr_provider(),
+        asr_model=LLM_ASR_MODEL or OPENAI_ASR_MODEL,
+        asr_language=LLM_ASR_LANGUAGE,
+        temperature=LLM_TEMPERATURE,
+        max_tokens=LLM_MAX_TOKENS,
+        timeout_seconds=LLM_TIMEOUT,
+        asr_timeout_seconds=LLM_ASR_TIMEOUT,
+        api_base=LLM_API_BASE,
+        api_key=LLM_API_KEY,
     )
 
 
 def load_llm_profiles() -> tuple[dict[str, LLMConfig], str]:
-    raw_profiles = os.getenv("ROBOTCLAW_LLM_PROFILES", "").strip()
-    active_profile_id = os.getenv("ROBOTCLAW_LLM_ACTIVE_PROFILE", "").strip() or "default"
+    raw_profiles = LLM_PROFILES
+    active_profile_id = LLM_ACTIVE_PROFILE
     profiles: dict[str, LLMConfig] = {}
 
     if raw_profiles:
         payload = json.loads(raw_profiles)
         if not isinstance(payload, list):
-            raise ValueError("ROBOTCLAW_LLM_PROFILES must be a JSON array")
+            raise ValueError("LLM_PROFILES must be a JSON array")
         for item in payload:
             if not isinstance(item, dict):
                 continue
@@ -52,9 +82,13 @@ def load_llm_profiles() -> tuple[dict[str, LLMConfig], str]:
                 label=str(item.get("label", profile_id)).strip() or profile_id,
                 provider=str(item.get("provider", "openai")).strip() or "openai",
                 model=str(item.get("model", "")).strip(),
+                asr_provider=str(item.get("asr_provider", "openai")).strip() or "openai",
+                asr_model=str(item.get("asr_model", "")).strip(),
+                asr_language=str(item.get("asr_language", "zh")).strip() or "zh",
                 temperature=float(item.get("temperature", 0.0) or 0.0),
                 max_tokens=int(item.get("max_tokens", 1024) or 1024),
                 timeout_seconds=float(item.get("timeout_seconds", 30.0) or 30.0),
+                asr_timeout_seconds=float(item.get("asr_timeout_seconds", 60.0) or 60.0),
                 api_base=str(item.get("api_base", "")).strip(),
                 api_key=str(item.get("api_key", "")).strip(),
             )
@@ -63,18 +97,23 @@ def load_llm_profiles() -> tuple[dict[str, LLMConfig], str]:
         default_config = load_llm_config()
         profiles[default_config.profile_id] = default_config
 
-        openai_model = os.getenv("OPENAI_CHAT_MODEL", "").strip()
-        openai_base = os.getenv("OPENAI_BASE_URL", "").strip()
-        openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+        openai_model = OPENAI_CHAT_MODEL
+        openai_asr_model = OPENAI_ASR_MODEL
+        openai_base = OPENAI_BASE_URL
+        openai_key = OPENAI_API_KEY
         if openai_model:
             profiles["openai"] = LLMConfig(
                 profile_id="openai",
                 label="OpenAI-Compatible",
                 provider="openai",
                 model=openai_model,
+                asr_provider=default_config.asr_provider,
+                asr_model=openai_asr_model,
+                asr_language=default_config.asr_language,
                 temperature=default_config.temperature,
                 max_tokens=default_config.max_tokens,
                 timeout_seconds=default_config.timeout_seconds,
+                asr_timeout_seconds=default_config.asr_timeout_seconds,
                 api_base=openai_base,
                 api_key=openai_key,
             )
@@ -93,9 +132,22 @@ def llm_config_from_payload(payload: dict) -> LLMConfig:
         label=str(payload.get("label", profile_id)).strip() or profile_id,
         provider=str(payload.get("provider", "openai")).strip() or "openai",
         model=str(payload.get("model", "")).strip(),
+        asr_provider=str(payload.get("asr_provider", "openai")).strip() or "openai",
+        asr_model=str(payload.get("asr_model", "")).strip(),
+        asr_language=str(payload.get("asr_language", "zh")).strip() or "zh",
         temperature=float(payload.get("temperature", 0.0) or 0.0),
         max_tokens=int(payload.get("max_tokens", 1024) or 1024),
         timeout_seconds=float(payload.get("timeout_seconds", 30.0) or 30.0),
+        asr_timeout_seconds=float(payload.get("asr_timeout_seconds", 60.0) or 60.0),
         api_base=str(payload.get("api_base", "")).strip(),
         api_key=str(payload.get("api_key", "")).strip(),
     )
+
+
+def _default_asr_provider() -> str:
+    explicit = LLM_ASR_PROVIDER
+    if explicit:
+        return explicit
+    if VOLCENGINE_ASR_WS_URL or VOLCENGINE_ASR_API_KEY or VOLCENGINE_ASR_ACCESS_KEY:
+        return "volcengine"
+    return "openai"
