@@ -58,6 +58,7 @@ class RuntimeService:
             session_id=envelope.session.session_id,
             task_id=envelope.task.task_id,
             user_query=request.content,
+            interaction_mode_snapshot=envelope.session.interaction_mode,
             route="chat",
             current_step="gateway_received",
         )
@@ -196,6 +197,7 @@ class RuntimeService:
             "runtime_state": {
                 "session_id": state.session_id,
                 "task_id": state.task_id,
+                "interaction_mode_snapshot": state.interaction_mode_snapshot,
                 "route": state.route,
                 "matched_playbook_id": state.matched_playbook_id,
                 "current_step": state.current_step,

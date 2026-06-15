@@ -293,6 +293,54 @@ body {
   padding: 18px 20px 16px;
 }
 
+.composer-modebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 0 2px;
+}
+
+.mode-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.mode-label {
+  color: var(--muted);
+  font-size: 0.92rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mode-select {
+  min-width: 152px;
+  border: 1px solid rgba(106, 103, 245, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text);
+  padding: 10px 14px;
+  font: inherit;
+  outline: none;
+}
+
+.mode-select:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+}
+
+.mode-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  text-align: right;
+}
+
 .composer-input {
   width: 100%;
   min-height: 86px;

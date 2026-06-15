@@ -34,6 +34,7 @@ class ChatGraphState(TypedDict, total=False):
     build_planner_prompt: Any
     build_summary_prompt: Any
     conversation_history: list[dict[str, str]]
+    interaction_mode: str
     intent: dict[str, Any]
     playbook: dict[str, Any]
     knowledge_source_docs: list[Any]

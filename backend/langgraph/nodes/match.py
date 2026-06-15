@@ -14,13 +14,18 @@ def match_playbook_node(state: dict) -> dict:
     diagnosis = state["diagnosis"]
     short_memory = state["short_memory"]
     request = state["request"]
+    interaction_mode = str(runtime_state.interaction_mode_snapshot or "").strip().lower()
 
     runtime_state.current_step = "match_playbook"
     playbook = match_playbook(state["playbook_engine"], request.content)
     runtime_state.matched_playbook_id = str(playbook["id"])
     runtime_state.playbook_execution.playbook_id = runtime_state.matched_playbook_id
     runtime_state.playbook_execution.status = "matched" if runtime_state.matched_playbook_id else "fallback"
-    runtime_state.route = select_route(matched_playbook_id=runtime_state.matched_playbook_id, request=request)
+    runtime_state.route = select_route(
+        matched_playbook_id=runtime_state.matched_playbook_id,
+        request=request,
+        interaction_mode=interaction_mode,
+    )
     short_memory.scratchpad["route_prompt"] = state["build_route_prompt"](request.content)
     short_memory.scratchpad["playbook"] = playbook
     runtime_state.trace.append(
@@ -38,6 +43,11 @@ def match_playbook_node(state: dict) -> dict:
                 confidence=float(playbook["confidence"]),
             )
         )
+    elif interaction_mode == "playbook":
+        short_memory.scratchpad["analysis"] = {
+            "summary": "当前模式仅执行 playbook，但这次没有匹配到可用模板。",
+            "detail": "请换一种更贴近标准故障流程的提问方式，或切换到知识问答 / agent 模式后再继续。",
+        }
     return {
         "runtime_state": runtime_state,
         "diagnosis": diagnosis,

@@ -12,7 +12,7 @@ from backend.memory import MemoryManager
 from backend.runtime import RuntimeService
 from backend.session import SessionManager
 from backend.shared import get_logger, load_env_file
-from backend.shared.config import SPEECH_AUTO_SEND
+from backend.shared.config import DEFAULT_INTERACTION_MODE, SPEECH_AUTO_SEND
 from backend.ssh import RobotConnectionConfig, SSHManager
 from backend.tools import ToolExecutor
 
@@ -38,11 +38,39 @@ class GatewayApplication:
         payload["connection"] = self.ssh_manager.ui_payload()
         payload["llm"] = self.runtime.llm_status()
         payload["speech"] = self.speech_status()
+        payload["default_interaction_mode"] = DEFAULT_INTERACTION_MODE
+        payload["interaction_modes"] = [
+            {
+                "id": "playbook",
+                "label": "Playbook",
+                "description": "只匹配并执行标准 playbook，不走知识问答与工具自由决策。",
+            },
+            {
+                "id": "qa",
+                "label": "Knowledge",
+                "description": "先匹配 playbook，再转为解释型回答；未命中则走知识检索，不执行工具。",
+            },
+            {
+                "id": "agent",
+                "label": "Agent",
+                "description": "先匹配 playbook；未命中时先检索知识，再由模型判断是否需要执行工具。",
+            },
+        ]
         return payload
 
-    def create_session(self, user_id: str) -> dict:
-        logger.info("Creating session for user_id=%s", user_id)
-        return self.session_manager.create_session_payload(user_id=user_id)
+    def create_session(self, user_id: str, interaction_mode: str = "") -> dict:
+        logger.info("Creating session for user_id=%s interaction_mode=%s", user_id, interaction_mode)
+        return self.session_manager.create_session_payload(user_id=user_id, interaction_mode=interaction_mode or None)
+
+    def set_session_mode(self, session_id: str, interaction_mode: str) -> dict:
+        logger.info("Updating session mode session_id=%s interaction_mode=%s", session_id, interaction_mode)
+        session = self.session_manager.update_interaction_mode(session_id, interaction_mode)
+        return {
+            "session": self.session_manager.session_payload(session.session_id),
+            "active_session_id": session.session_id,
+            "effective_from": "next_request",
+            "running_task_affected": False,
+        }
 
     def send_chat(self, session_id: str, user_id: str, content: str) -> dict:
         logger.info("Received chat request session_id=%s user_id=%s", session_id, user_id)

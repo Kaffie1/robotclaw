@@ -230,9 +230,57 @@ def decide_knowledge_response_mode_node(state: dict) -> dict:
     query = str(state["request"].content or "").strip()
     knowledge = state.get("knowledge") or short_memory.scratchpad.get("knowledge") or {}
     history_text = _format_history(state.get("conversation_history") or [])
+    interaction_mode = str(runtime_state.interaction_mode_snapshot or "").strip().lower()
     response_mode = "answer"
     summary = "当前使用知识直答模式"
     detail = "response_mode=answer"
+    analysis = None
+    if interaction_mode == "playbook":
+        analysis = {
+            "summary": "当前模式仅执行 playbook，本轮不会进入知识检索或工具执行。",
+            "detail": "如果需要知识问答或自动执行，请切换到 qa 或 agent 模式。",
+        }
+        short_memory.scratchpad["response_mode"] = response_mode
+        short_memory.scratchpad["execution_mode_source"] = "mode_forced"
+        short_memory.scratchpad["execution_mode_result"] = {
+            "mode": response_mode,
+            "summary": summary,
+            "detail": detail,
+        }
+        short_memory.scratchpad["analysis"] = analysis
+        runtime_state.trace.append(
+            RouteDecision(
+                stage="知识回答模式",
+                summary=summary,
+                detail="interaction_mode=playbook -> force answer",
+            )
+        )
+        return {
+            "runtime_state": runtime_state,
+            "short_memory": short_memory,
+            "response_mode": response_mode,
+            "analysis": analysis,
+        }
+    if interaction_mode == "qa":
+        short_memory.scratchpad["response_mode"] = response_mode
+        short_memory.scratchpad["execution_mode_source"] = "mode_forced"
+        short_memory.scratchpad["execution_mode_result"] = {
+            "mode": response_mode,
+            "summary": summary,
+            "detail": detail,
+        }
+        runtime_state.trace.append(
+            RouteDecision(
+                stage="知识回答模式",
+                summary=summary,
+                detail="interaction_mode=qa -> force answer",
+            )
+        )
+        return {
+            "runtime_state": runtime_state,
+            "short_memory": short_memory,
+            "response_mode": response_mode,
+        }
     prompt = build_execution_mode_prompt(
         query,
         knowledge_context=str(knowledge.get("context", "") or ""),
@@ -286,6 +334,7 @@ def decide_knowledge_response_mode_node(state: dict) -> dict:
         "runtime_state": runtime_state,
         "short_memory": short_memory,
         "response_mode": response_mode,
+        "analysis": analysis,
     }
 
 

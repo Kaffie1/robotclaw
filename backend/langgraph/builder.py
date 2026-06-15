@@ -24,7 +24,13 @@ from backend.langgraph.nodes import (
     summarize_response_node,
 )
 from backend.langgraph.prompts import build_classify_prompt, build_planner_prompt, build_route_prompt, build_summary_prompt
-from backend.langgraph.router import route_after_call_tools, route_after_interpret, route_after_match
+from backend.langgraph.router import (
+    route_after_build_messages,
+    route_after_call_tools,
+    route_after_interpret,
+    route_after_knowledge_mode,
+    route_after_match,
+)
 from backend.langgraph.router import route_after_playbook_execution
 from backend.langgraph.state import ChatGraphState
 from backend.memory import MemoryManager
@@ -77,6 +83,7 @@ def build_chat_graph() -> Any:
         {
             "playbook_execution": "playbook_execution",
             "knowledge_selection": "load_knowledge_source_docs",
+            "summarize_response": "summarize_response",
         },
     )
     graph.add_conditional_edges(
@@ -100,8 +107,22 @@ def build_chat_graph() -> Any:
     )
     graph.add_edge("merge_knowledge_retrieval", "assemble_knowledge_context")
     graph.add_edge("assemble_knowledge_context", "decide_knowledge_response_mode")
-    graph.add_edge("decide_knowledge_response_mode", "build_messages")
-    graph.add_edge("build_messages", "call_model")
+    graph.add_conditional_edges(
+        "decide_knowledge_response_mode",
+        route_after_knowledge_mode,
+        {
+            "build_messages": "build_messages",
+            "summarize_response": "summarize_response",
+        },
+    )
+    graph.add_conditional_edges(
+        "build_messages",
+        route_after_build_messages,
+        {
+            "summarize_response": "summarize_response",
+            "call_model": "call_model",
+        },
+    )
     graph.add_edge("call_model", "interpret_output")
     graph.add_conditional_edges(
         "interpret_output",
@@ -162,6 +183,7 @@ NODE_SEQUENCE: tuple[str, ...] = (
     "interpret_output",
     "call_tools",
     "await_confirmation",
+    "summarize_response",
 )
 
 
@@ -244,7 +266,12 @@ def _build_graph_state(
         "build_route_prompt": build_route_prompt,
         "build_planner_prompt": build_planner_prompt,
         "build_summary_prompt": build_summary_prompt,
-        "conversation_history": _build_recent_conversation_history(session_memory.chat_history, current_content=request.content),
+        "interaction_mode": state.interaction_mode_snapshot,
+        "conversation_history": _build_recent_conversation_history(
+            session_memory.chat_history,
+            current_content=request.content,
+            interaction_mode=state.interaction_mode_snapshot,
+        ),
     }
     if "intent" in short_memory.scratchpad:
         graph_state["intent"] = short_memory.scratchpad["intent"]
@@ -257,7 +284,15 @@ def _build_graph_state(
     return graph_state
 
 
-def _build_recent_conversation_history(chat_history, *, current_content: str, limit: int = 6) -> list[dict[str, str]]:
+def _build_recent_conversation_history(
+    chat_history,
+    *,
+    current_content: str,
+    interaction_mode: str,
+    limit: int = 10,
+) -> list[dict[str, str]]:
+    if str(interaction_mode or "").strip().lower() == "playbook":
+        return []
     current = str(current_content or "").strip()
     history = [
         {
@@ -291,6 +326,9 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
         if route_after_playbook_execution(state) == "summarize" and _should_run("summarize_response", start_node):
             state.update(_run_node("summarize_response", summarize_response_node, state))
             return state
+    if next_node == "summarize_response" and _should_run("summarize_response", start_node):
+        state.update(_run_node("summarize_response", summarize_response_node, state))
+        return state
     if next_node == "knowledge_selection" and _should_run("load_knowledge_source_docs", start_node):
         state.update(_run_node("load_knowledge_source_docs", load_knowledge_source_docs_node, state))
         if _is_terminal(state):
@@ -313,10 +351,20 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
         state.update(_run_node("decide_knowledge_response_mode", decide_knowledge_response_mode_node, state))
         if _is_terminal(state):
             return state
+        next_node = route_after_knowledge_mode(state)
+        if next_node == "summarize_response":
+            if _should_run("summarize_response", start_node):
+                state.update(_run_node("summarize_response", summarize_response_node, state))
+            return state
 
     if _should_run("build_messages", start_node):
         state.update(_run_node("build_messages", build_messages_node, state))
         if _is_terminal(state):
+            return state
+        next_node = route_after_build_messages(state)
+        if next_node == "summarize_response":
+            if _should_run("summarize_response", start_node):
+                state.update(_run_node("summarize_response", summarize_response_node, state))
             return state
 
     while True:

@@ -5,9 +5,9 @@ from threading import RLock
 from backend.memory import MemoryManager
 from backend.memory.models import SessionMemory
 from backend.session.history import build_preview, serialize_messages
-from backend.session.models import ChatTurn, SessionState, TaskState, TimestampSet, UserIdentity
+from backend.session.models import ChatTurn, SessionState, TaskState, TimestampSet, UserIdentity, normalize_interaction_mode
 from backend.session.store import SessionStore
-from backend.shared import infer_title, next_session_id, next_task_id, now_hhmm, now_iso
+from backend.shared import DEFAULT_INTERACTION_MODE, infer_title, next_session_id, next_task_id, now_hhmm, now_iso
 
 
 class SessionManager:
@@ -16,13 +16,14 @@ class SessionManager:
         self._memory_manager = memory_manager or MemoryManager()
         self._store = SessionStore()
 
-    def create_session(self, user: UserIdentity, title: str | None = None) -> SessionState:
+    def create_session(self, user: UserIdentity, title: str | None = None, interaction_mode: str | None = None) -> SessionState:
         with self._lock:
             session_id = next_session_id()
             timestamps = TimestampSet(created_at=now_iso(), updated_at=now_iso())
             session = SessionState(
                 session_id=session_id,
                 user=user,
+                interaction_mode=normalize_interaction_mode(interaction_mode or DEFAULT_INTERACTION_MODE),
                 status="created",
                 active_topic=title or "",
                 timestamps=timestamps,
@@ -70,6 +71,14 @@ class SessionManager:
             session.timestamps.updated_at = now_iso()
             self._store.save_session(session)
             self._move_to_front(session_id)
+
+    def update_interaction_mode(self, session_id: str, interaction_mode: str) -> SessionState:
+        with self._lock:
+            session = self._store.get_session(session_id)
+            session.interaction_mode = normalize_interaction_mode(interaction_mode, default=session.interaction_mode)
+            session.timestamps.updated_at = now_iso()
+            self._store.save_session(session)
+            return session
 
     def update_session_from_chat(self, session_id: str, title_seed: str) -> None:
         with self._lock:
@@ -122,9 +131,9 @@ class SessionManager:
             "active_session_id": session_ids[0] if session_ids else "",
         }
 
-    def create_session_payload(self, user_id: str) -> dict:
+    def create_session_payload(self, user_id: str, interaction_mode: str | None = None) -> dict:
         user = UserIdentity(user_id=user_id, username=user_id)
-        session = self.create_session(user)
+        session = self.create_session(user, interaction_mode=interaction_mode)
         task = self.create_task(session.session_id, "新会话", task_type="diagnose")
         self.record_turn(session.session_id, "assistant", "新的会话已创建。你可以直接输入机器人问题，或先连接右侧机器人。")
         self.set_task_status(task.task_id, "created")
@@ -142,6 +151,7 @@ class SessionManager:
             "title": session.active_topic or "新会话",
             "preview": build_preview(memory),
             "messages": serialize_messages(memory),
+            "interaction_mode": session.interaction_mode,
         }
 
     def history_payload(self, session_id: str) -> dict:

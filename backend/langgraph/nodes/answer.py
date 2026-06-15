@@ -5,7 +5,15 @@ import re
 from typing import Any
 
 from backend.langgraph.nodes.confirm import await_confirmation_node
-from backend.langgraph.prompts import build_fault_chat_system_prompt, build_knowledge_answer_system_prompt
+from backend.langgraph.prompts import (
+    build_answer_disallow_command_retry_prompt,
+    build_answer_invalid_json_retry_prompt,
+    build_answer_missing_protocol_retry_prompt,
+    build_answer_user_prompt,
+    build_fault_chat_system_prompt,
+    build_knowledge_answer_system_prompt,
+    build_tool_feedback_prompt,
+)
 from backend.llm.models import LLMMessage
 from backend.llm.parser import extract_json_object
 from backend.runtime.models import EvidenceItem, RouteDecision
@@ -97,11 +105,7 @@ def interpret_model_output_node(state: dict) -> dict:
         messages.append(
             LLMMessage(
                 role="user",
-                content=(
-                    "上一个回复不符合格式要求。"
-                    "请只输出一个 JSON 对象；如果需要继续诊断请输出 command 或 clarify，"
-                    "如果已经有结论请输出 final。"
-                ),
+                content=build_answer_invalid_json_retry_prompt(),
             )
         )
         return {
@@ -137,11 +141,7 @@ def interpret_model_output_node(state: dict) -> dict:
         messages.append(
             LLMMessage(
                 role="user",
-                content=(
-                    "当前处于知识直答模式。"
-                    "不要调用工具，不要输出 command。"
-                    "请直接给出最终文字答案；如果用户要 Python 代码或接口示例，请直接输出示例。"
-                ),
+                content=build_answer_disallow_command_retry_prompt(),
             )
         )
         if messages:
@@ -166,7 +166,7 @@ def interpret_model_output_node(state: dict) -> dict:
         messages.append(
             LLMMessage(
                 role="user",
-                content="上一个回复没有给出 command、clarify 或 final。请按约定重新输出。",
+                content=build_answer_missing_protocol_retry_prompt(),
             )
         )
         return {
@@ -351,31 +351,12 @@ def _build_history_messages(history: list[dict[str, str]]) -> list[LLMMessage]:
 
 
 def _build_user_prompt(*, query: str, response_mode: str, knowledge: dict[str, Any], playbook: dict[str, Any]) -> str:
-    parts = [f"用户问题：{query}"]
-    if response_mode == "answer":
-        context = str(knowledge.get("context") or "").strip()
-        citations = _format_citations(knowledge.get("citations") or [])
-        if context:
-            parts.append(f"知识上下文：\n{context}")
-        if citations:
-            parts.append(f"参考引用：\n{citations}")
-        parts.append(
-            "请基于以上知识直接回答用户。"
-            "历史对话可用于承接上一轮已经确认的结论和上下文。"
-            "如果涉及 ROS / shell / docker 命令、topic、service、参数，请只使用知识上下文里明确出现的原文；"
-            "如果上下文没有完整命令，就明确说明文档未提供完整命令。"
-            "必要时给出最小可用代码或接口示例，但示例中的接口名、参数名也必须来自知识上下文。"
-        )
-        return "\n\n".join(parts)
-
-    playbook_summary = str(playbook.get("summary") or "").strip()
-    playbook_detail = str(playbook.get("detail") or "").strip()
-    if playbook_summary:
-        parts.append(f"当前匹配到的模板摘要：{playbook_summary}")
-    if playbook_detail:
-        parts.append(f"模板说明：{playbook_detail}")
-    parts.append("如果需要继续诊断，请只输出符合协议的 JSON。")
-    return "\n\n".join(parts)
+    return build_answer_user_prompt(
+        query=query,
+        response_mode=response_mode,
+        knowledge=knowledge,
+        playbook=playbook,
+    )
 
 
 def _extract_final_answer(payload: dict[str, Any], *, fallback: str) -> str:
@@ -427,28 +408,13 @@ def _normalize_command_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def _build_tool_feedback_message(tool_name: str, tool_args: dict[str, Any], tool_result: dict[str, Any]) -> str:
     facts = tool_result.get("facts") if isinstance(tool_result.get("facts"), dict) else {}
     raw_output = _normalize_tool_raw_output(tool_result.get("raw_output"))
-    return (
-        "【工具执行结果】\n"
-        f"工具: {tool_name}\n"
-        f"参数: {_pretty_json(tool_args)}\n"
-        f"执行状态: {str(tool_result.get('status') or '').strip() or 'unknown'}\n"
-        f"摘要: {str(tool_result.get('summary') or '').strip() or '无'}\n"
-        f"结构化事实: {_pretty_json(facts)}\n"
-        f"原始输出:\n{raw_output}\n"
-        "请基于结构化事实和原始输出判断当前证据是否足以支持结论，不要只复述摘要。"
+    return build_tool_feedback_prompt(
+        tool_name,
+        _pretty_json(tool_args),
+        tool_result,
+        facts_text=_pretty_json(facts),
+        raw_output=raw_output,
     )
-
-
-def _format_citations(citations: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for item in citations:
-        if not isinstance(item, dict):
-            continue
-        filename = str(item.get("filename", "") or "").strip()
-        chunk_id = str(item.get("chunk_id", "") or "").strip()
-        if filename or chunk_id:
-            lines.append(f"- {filename}#{chunk_id}")
-    return "\n".join(lines)
 
 
 def _try_parse_json(content: str) -> dict[str, Any] | None:
@@ -462,24 +428,34 @@ def _build_target_fingerprint(tool_name: str, tool_args: dict[str, Any]) -> str:
     normalized_tool = str(tool_name or "").strip()
     if not isinstance(tool_args, dict):
         return ""
-    for key, prefix in (
-        ("name", "name"),
-        ("topic", "topic"),
-        ("host", "host"),
-        ("service", "service"),
-    ):
+    explicit_target = _extract_explicit_target(tool_args)
+    if explicit_target:
+        return explicit_target
+    command_target = _extract_command_target(tool_args)
+    if command_target:
+        return command_target
+    return f"tool:{normalized_tool}:{json.dumps(tool_args, ensure_ascii=False, sort_keys=True)}"
+
+
+def _extract_explicit_target(tool_args: dict[str, Any]) -> str:
+    for key in ("name", "topic", "host", "service"):
         value = str(tool_args.get(key) or "").strip()
         if value:
-            return f"{prefix}:{value}"
+            return f"{key}:{value}"
+    return ""
+
+
+def _extract_command_target(tool_args: dict[str, Any]) -> str:
     command = str(tool_args.get("command") or "").strip()
-    if command:
-        topic_match = re.search(r"(/[\w/.-]+)", command)
-        if topic_match:
-            return f"command_target:{topic_match.group(1)}"
-        host_match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", command)
-        if host_match:
-            return f"command_host:{host_match.group(1)}"
-    return f"tool:{normalized_tool}:{json.dumps(tool_args, ensure_ascii=False, sort_keys=True)}"
+    if not command:
+        return ""
+    topic_match = re.search(r"(/[\w/.-]+)", command)
+    if topic_match:
+        return f"command_target:{topic_match.group(1)}"
+    host_match = re.search(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", command)
+    if host_match:
+        return f"command_host:{host_match.group(1)}"
+    return ""
 
 
 def _finish_with_answer(

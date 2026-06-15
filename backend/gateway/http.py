@@ -45,7 +45,21 @@ def build_handler(app: GatewayApplication):
             try:
                 if parsed.path == "/api/sessions":
                     user_id = str(data.get("user_id", "u001")).strip() or "u001"
-                    self.send_json(app.create_session(user_id), status=HTTPStatus.CREATED)
+                    self.send_json(
+                        app.create_session(
+                            user_id,
+                            interaction_mode=str(data.get("interaction_mode", "")).strip(),
+                        ),
+                        status=HTTPStatus.CREATED,
+                    )
+                    return
+                if parsed.path == "/api/session/mode":
+                    self.send_json(
+                        app.set_session_mode(
+                            session_id=str(data.get("session_id", "")).strip(),
+                            interaction_mode=str(data.get("interaction_mode", "")).strip(),
+                        )
+                    )
                     return
                 if parsed.path == "/api/chat/send":
                     payload = app.send_chat(

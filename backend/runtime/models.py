@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.playbook.models import PlaybookExecutionState
-from backend.session.models import SessionState, TaskState
+from backend.session.models import InteractionMode, SessionState, TaskState
 from backend.ssh.models import RobotConnectionConfig
 from backend.tools.models import ToolCall, ToolResult
 
@@ -42,6 +42,7 @@ class RuntimeState:
     session_id: str
     task_id: str
     user_query: str
+    interaction_mode_snapshot: InteractionMode = "agent"
     route: str = ""
     matched_playbook_id: str = ""
     current_step: str = ""

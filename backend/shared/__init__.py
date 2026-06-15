@@ -1,6 +1,7 @@
 from backend.shared.config import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
+    DEFAULT_INTERACTION_MODE,
     EMBEDDING_API_KEY,
     EMBEDDING_BASE_URL,
     EMBEDDING_DEVICE,
@@ -65,6 +66,7 @@ from backend.shared.time import now_hhmm, now_iso
 __all__ = [
     "CHUNK_OVERLAP",
     "CHUNK_SIZE",
+    "DEFAULT_INTERACTION_MODE",
     "EMBEDDING_API_KEY",
     "EMBEDDING_BASE_URL",
     "EMBEDDING_DEVICE",

@@ -57,7 +57,54 @@ def _build_detail(spec: PlaybookSpec) -> str:
     details = [f"type={spec.meta.category}"]
     if spec.meta.description:
         details.append(spec.meta.description)
+    ordered_steps = _summarize_ordered_steps(spec)
+    if ordered_steps:
+        details.append(ordered_steps)
     return "；".join(details)
+
+
+def _summarize_ordered_steps(spec: PlaybookSpec) -> str:
+    children = list(getattr(spec.root, "children", []) or [])
+    if not children:
+        return ""
+    step_texts: list[str] = []
+    for index, child in enumerate(children[:3], start=1):
+        label = str(child.name or child.node_id or f"step_{index}").strip()
+        summary = _node_step_summary(child)
+        step_texts.append(f"{index}. {summary or label}")
+    return "建议排查顺序：" + " -> ".join(step_texts)
+
+
+def _node_step_summary(node: PlaybookSpec | object) -> str:
+    name = str(getattr(node, "name", "") or "").strip()
+    args = getattr(node, "args", {}) or {}
+    target = _describe_node_target(args)
+    if target:
+        return f"{name}（对象：{target}）"
+    return name
+
+
+def _describe_node_target(args: object) -> str:
+    for candidate in _iter_scalar_values(args):
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _iter_scalar_values(value: object) -> list[object]:
+    values: list[object] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            values.extend(_iter_scalar_values(item))
+        return values
+    if isinstance(value, list):
+        for item in value:
+            values.extend(_iter_scalar_values(item))
+        return values
+    if isinstance(value, (str, int, float, bool)):
+        return [value]
+    return values
 
 
 def _fallback_result() -> dict[str, str | float]:

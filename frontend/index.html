@@ -35,6 +35,13 @@
           <div class="chat-scroll" id="chatScroll"></div>
 
           <div class="composer">
+            <div class="composer-modebar">
+              <label class="mode-field" for="interactionModeSelect">
+                <span class="mode-label">当前模式</span>
+                <select id="interactionModeSelect" class="mode-select"></select>
+              </label>
+              <div class="mode-hint" id="interactionModeHint"></div>
+            </div>
             <textarea
               id="messageInput"
               class="composer-input"
