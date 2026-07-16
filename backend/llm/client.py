@@ -288,12 +288,39 @@ def _to_langchain_messages(messages: list[LLMMessage]) -> list[Any]:
 
     converted: list[Any] = []
     for message in messages:
+        content = _to_langchain_content(message.content)
         if message.role == "system":
-            converted.append(SystemMessage(content=message.content))
+            converted.append(SystemMessage(content=content))
         elif message.role == "assistant":
-            converted.append(AIMessage(content=message.content))
+            converted.append(AIMessage(content=content))
         else:
-            converted.append(HumanMessage(content=message.content))
+            converted.append(HumanMessage(content=content))
+    return converted
+
+
+def _to_langchain_content(content: str | list[dict[str, Any]]) -> str | list[dict[str, Any]]:
+    if not isinstance(content, list):
+        return content
+
+    converted: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            converted.append({"type": "text", "text": str(block)})
+            continue
+        block_type = str(block.get("type") or "").strip().lower()
+        if block_type == "image":
+            source = block.get("source") if isinstance(block.get("source"), dict) else {}
+            media_type = str(source.get("media_type") or block.get("media_type") or "image/png").strip() or "image/png"
+            data = str(source.get("data") or block.get("data") or "").strip()
+            if data:
+                converted.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{data}"},
+                    }
+                )
+            continue
+        converted.append({"type": "text", "text": str(block.get("text", ""))})
     return converted
 
 
@@ -348,10 +375,25 @@ def _summarize_messages(messages: list[LLMMessage]) -> list[dict[str, str]]:
     return [
         {
             "role": message.role,
-            "content": _clip_text(message.content, limit=160),
+            "content": _clip_text(_content_to_log_text(message.content), limit=160),
         }
         for message in messages
     ]
+
+
+def _content_to_log_text(content: str | list[dict[str, Any]]) -> str:
+    if not isinstance(content, list):
+        return content
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "image":
+            source = block.get("source") if isinstance(block.get("source"), dict) else {}
+            parts.append(f"[image:{source.get('media_type', 'image')}]")
+        elif isinstance(block, dict):
+            parts.append(str(block.get("text", "")))
+        else:
+            parts.append(str(block))
+    return " ".join(item for item in parts if item).strip()
 
 
 def _build_multipart_form_data(

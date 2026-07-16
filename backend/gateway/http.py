@@ -20,6 +20,11 @@ def build_handler(app: GatewayApplication):
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path in {"", "/", "/frontend"}:
+                self.send_response(HTTPStatus.FOUND)
+                self.send_header("Location", "/frontend/")
+                self.end_headers()
+                return
             if parsed.path == "/api/bootstrap":
                 self.send_json(app.bootstrap())
                 return
@@ -66,6 +71,7 @@ def build_handler(app: GatewayApplication):
                         session_id=str(data.get("session_id", "")).strip(),
                         user_id=str(data.get("user_id", "u001")).strip() or "u001",
                         content=str(data.get("content", "")),
+                        images=data.get("images") if isinstance(data.get("images"), list) else [],
                     )
                     self.send_json(payload)
                     return
@@ -177,10 +183,6 @@ def build_handler(app: GatewayApplication):
 
         def serve_static(self, path: str) -> None:
             normalized = path or "/"
-            if normalized == "/":
-                normalized = "/frontend/"
-            if normalized == "/frontend":
-                normalized = "/frontend/"
             if normalized.endswith("/"):
                 normalized = normalized + "index.html"
 

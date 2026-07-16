@@ -38,7 +38,7 @@ class SessionState:
     user: UserIdentity
     current_task_id: str = ""
     current_robot_ref: str = ""
-    interaction_mode: InteractionMode = "agent"
+    interaction_mode: InteractionMode = "qa"
     status: TaskStatus = "created"
     active_topic: str = ""
     timestamps: TimestampSet = field(default_factory=TimestampSet)
@@ -64,7 +64,7 @@ class ChatTurn:
     created_at: str = ""
 
 
-def normalize_interaction_mode(value: str, default: InteractionMode = "agent") -> InteractionMode:
+def normalize_interaction_mode(value: str, default: InteractionMode = "qa") -> InteractionMode:
     normalized = str(value or "").strip().lower()
     if normalized in {"playbook", "qa", "agent"}:
         return normalized

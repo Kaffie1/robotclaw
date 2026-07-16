@@ -36,11 +36,18 @@ class RuntimeService:
         self.workflow_store = WorkflowStore()
         self.event_bus = WorkflowEventBus()
 
-    def build_request(self, session_id: str, user_id: str, content: str) -> ChatRequest:
+    def build_request(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        images: list[dict] | None = None,
+    ) -> ChatRequest:
         request = ChatRequest(
             session_id=session_id,
             user_id=user_id,
             content=content,
+            images=list(images or []),
             request_id=next_request_id(),
         )
         logger.info("Built request request_id=%s session_id=%s user_id=%s", request.request_id, session_id, user_id)

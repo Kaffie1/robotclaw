@@ -66,9 +66,9 @@ MINERU_SERVER_URL = str(os.getenv("MINERU_SERVER_URL") or "").strip()
 SPEECH_AUTO_SEND = True
 
 # ========== 会话模式配置 ==========
-DEFAULT_INTERACTION_MODE = str(os.getenv("DEFAULT_INTERACTION_MODE") or "agent").strip().lower() or "agent"
+DEFAULT_INTERACTION_MODE = str(os.getenv("DEFAULT_INTERACTION_MODE") or "qa").strip().lower() or "qa"
 if DEFAULT_INTERACTION_MODE not in {"playbook", "qa", "agent"}:
-    DEFAULT_INTERACTION_MODE = "agent"
+    DEFAULT_INTERACTION_MODE = "qa"
 
 # ========== 火山 ASR 配置 ==========
 VOLCENGINE_ASR_MODEL = str(os.getenv("VOLCENGINE_ASR_MODEL") or "").strip() or "bigmodel"

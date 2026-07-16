@@ -11,6 +11,7 @@ class ChatRequest:
     session_id: str
     user_id: str
     content: str
+    images: list[dict[str, Any]] = field(default_factory=list)
     request_id: str = ""
     interrupt: bool = False
     resume: bool = False

@@ -39,17 +39,13 @@ def build_messages_node(state: dict) -> dict:
         )
     ]
     messages.extend(_build_history_messages(state.get("conversation_history") or []))
-    messages.append(
-        LLMMessage(
-            role="user",
-            content=_build_user_prompt(
-                query=request.content,
-                response_mode=response_mode,
-                knowledge=knowledge,
-                playbook=playbook,
-            ),
-        )
+    user_prompt = _build_user_prompt(
+        query=request.content,
+        response_mode=response_mode,
+        knowledge=knowledge,
+        playbook=playbook,
     )
+    messages.append(LLMMessage(role="user", content=_with_image_blocks(user_prompt, request.images)))
     short_memory.scratchpad["llm_messages"] = [{"role": item.role, "content": item.content} for item in messages]
     runtime_state.trace.append(
         RouteDecision(
@@ -357,6 +353,16 @@ def _build_user_prompt(*, query: str, response_mode: str, knowledge: dict[str, A
         knowledge=knowledge,
         playbook=playbook,
     )
+
+
+def _with_image_blocks(text: str, images: list[dict[str, Any]] | None) -> str | list[dict[str, Any]]:
+    if not images:
+        return text
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for image in images:
+        if isinstance(image, dict):
+            blocks.append(image)
+    return blocks
 
 
 def _extract_final_answer(payload: dict[str, Any], *, fallback: str) -> str:

@@ -48,9 +48,11 @@
               rows="1"
               placeholder="请输入你的问题..."
             ></textarea>
+            <div class="composer-image-preview" id="imagePreview" hidden></div>
             <div class="composer-actions">
               <div class="composer-tools">
-                <button class="icon-button sprite sprite-attach" type="button" title="附件"></button>
+                <button class="icon-button sprite sprite-attach" id="attachImageButton" type="button" title="添加图片"></button>
+                <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
                 <button class="icon-button sprite sprite-command" type="button" title="命令"></button>
               </div>
               <div class="composer-primary-actions">
@@ -159,6 +161,11 @@
         <div class="session-preview"></div>
       </button>
     </template>
+
+    <div class="image-lightbox" id="imageLightbox" hidden>
+      <button class="image-lightbox-close" id="imageLightboxClose" type="button" aria-label="关闭图片预览">×</button>
+      <img class="image-lightbox-img" id="imageLightboxImg" alt="图片预览" />
+    </div>
 
     <script src="./app.js"></script>
   </body>

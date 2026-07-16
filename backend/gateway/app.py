@@ -72,9 +72,14 @@ class GatewayApplication:
             "running_task_affected": False,
         }
 
-    def send_chat(self, session_id: str, user_id: str, content: str) -> dict:
+    def send_chat(self, session_id: str, user_id: str, content: str, images: list[dict] | None = None) -> dict:
         logger.info("Received chat request session_id=%s user_id=%s", session_id, user_id)
-        request = self.runtime.build_request(session_id=session_id, user_id=user_id, content=content)
+        request = self.runtime.build_request(
+            session_id=session_id,
+            user_id=user_id,
+            content=content,
+            images=self._normalize_image_attachments(images or []),
+        )
         return self._run_chat(session_id=session_id, request=request)
 
     def send_voice_chat(
@@ -203,11 +208,12 @@ class GatewayApplication:
         return self.runtime.upsert_llm_profile(payload=payload, activate=activate)
 
     def _run_chat(self, session_id: str, request: ChatRequest) -> dict:
-        task = self.session_manager.ensure_active_task(session_id, title=request.content)
+        display_content = self._display_request_content(request)
+        task = self.session_manager.ensure_active_task(session_id, title=display_content)
         session = self.session_manager.get_session_state(session_id)
         session.current_robot_ref = self.ssh_manager.current_config().robot_ref
         self.session_manager.set_task_status(task.task_id, "running", current_node="runtime")
-        self.session_manager.record_turn(session_id, "user", request.content)
+        self.session_manager.record_turn(session_id, "user", display_content)
 
         envelope = RuntimeEnvelope(
             session=session,
@@ -231,7 +237,7 @@ class GatewayApplication:
             _state.current_step,
         )
         self.session_manager.record_turn(session_id, "assistant", response.summary)
-        self.session_manager.update_session_from_chat(session_id, request.content)
+        self.session_manager.update_session_from_chat(session_id, display_content)
         self.session_manager.set_task_status(task.task_id, response.status, current_node=_state.current_step)
         return {
             "session": self.session_manager.session_payload(session_id),
@@ -246,6 +252,13 @@ class GatewayApplication:
                 "data": response.data,
             },
         }
+
+    def _display_request_content(self, request: ChatRequest) -> str:
+        content = str(request.content or "").strip()
+        if not request.images:
+            return content
+        image_label = f"[{len(request.images)} 张图片]"
+        return f"{content} {image_label}".strip() if content else f"图片 {image_label}"
 
     def connect_robot(
         self,
@@ -310,6 +323,39 @@ class GatewayApplication:
             raise ValueError("音频数据为空")
         return audio_bytes
 
+    def _normalize_image_attachments(self, images: list[dict]) -> list[dict]:
+        normalized: list[dict] = []
+        for image in images[:4]:
+            if not isinstance(image, dict):
+                continue
+            source = image.get("source") if isinstance(image.get("source"), dict) else {}
+            raw_data = str(image.get("data") or source.get("data") or "").strip()
+            if "," in raw_data and raw_data.lower().startswith("data:"):
+                raw_data = raw_data.split(",", 1)[1]
+            if not raw_data:
+                continue
+            try:
+                image_bytes = base64.b64decode(raw_data, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("图片 base64 非法") from exc
+            if len(image_bytes) > 5 * 1024 * 1024:
+                raise ValueError("单张图片不能超过 5MB")
+            media_type = str(image.get("media_type") or source.get("media_type") or "image/png").strip().lower()
+            if media_type not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+                raise ValueError(f"不支持的图片类型：{media_type}")
+            normalized.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": raw_data,
+                    },
+                    "name": str(image.get("name") or "").strip(),
+                }
+            )
+        return normalized
+
     def _default_audio_filename(self, mime_type: str) -> str:
         normalized = mime_type.strip().lower()
         if normalized == "audio/wav":
@@ -325,6 +371,10 @@ class GatewayApplication:
     def _user_facing_runtime_error(self, exc: Exception) -> str:
         message = str(exc).strip()
         normalized = message.lower()
+        if "account_expired" in normalized or "account expired" in normalized:
+            return "当前聊天模型账号已过期，请更换可用的 OPENAI_API_KEY 或充值后重试"
+        if "permissiondenied" in normalized or "permission denied" in normalized or "403" in normalized:
+            return "当前聊天模型认证失败或无权限，请检查 OPENAI_API_KEY、OPENAI_BASE_URL 和模型配置"
         if "rate_limit" in normalized or "429" in normalized or "用量上限" in message:
             return "当前聊天模型额度已用尽，请更换可用模型或充值后重试"
         if message:

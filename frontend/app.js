@@ -2,7 +2,7 @@ const state = {
   sessions: [],
   activeSessionId: "",
   interactionModes: [],
-  defaultInteractionMode: "agent",
+  defaultInteractionMode: "qa",
   chatBusy: false,
   connection: {
     connected: false,
@@ -14,6 +14,7 @@ const state = {
     asr_enabled: false,
     auto_send: true,
   },
+  pendingImages: [],
 };
 
 let pendingMessageId = 0;
@@ -44,6 +45,12 @@ const refs = {
   composerStatus: document.getElementById("composerStatus"),
   interactionModeSelect: document.getElementById("interactionModeSelect"),
   interactionModeHint: document.getElementById("interactionModeHint"),
+  attachImageButton: document.getElementById("attachImageButton"),
+  imageInput: document.getElementById("imageInput"),
+  imagePreview: document.getElementById("imagePreview"),
+  imageLightbox: document.getElementById("imageLightbox"),
+  imageLightboxImg: document.getElementById("imageLightboxImg"),
+  imageLightboxClose: document.getElementById("imageLightboxClose"),
 };
 
 async function request(path, options = {}) {
@@ -109,12 +116,43 @@ function renderMessages() {
     if (message.pending) {
       container.classList.add("pending");
     }
-    bubble.textContent = message.content;
+    renderMessageBubble(bubble, message);
     time.textContent = message.created_at || "";
     refs.chatScroll.appendChild(fragment);
   }
 
   refs.chatScroll.scrollTop = refs.chatScroll.scrollHeight;
+}
+
+function renderMessageBubble(bubble, message) {
+  bubble.textContent = "";
+  const text = String(message.content || "").trim();
+  if (text) {
+    const textNode = document.createElement("div");
+    textNode.className = "message-text";
+    textNode.textContent = text;
+    bubble.appendChild(textNode);
+  }
+
+  const images = Array.isArray(message.images) ? message.images : [];
+  if (images.length > 0) {
+    const grid = document.createElement("div");
+    grid.className = "message-images";
+    for (const image of images) {
+      const mediaType = String(image.media_type || image.source?.media_type || "image/png");
+      const data = String(image.data || image.source?.data || "");
+      if (!data) continue;
+      const preview = document.createElement("img");
+      preview.className = "message-image";
+      preview.alt = image.name || "attached image";
+      preview.src = `data:${mediaType};base64,${data}`;
+      preview.addEventListener("click", () => openImageLightbox(preview.src, preview.alt));
+      grid.appendChild(preview);
+    }
+    if (grid.children.length > 0) {
+      bubble.appendChild(grid);
+    }
+  }
 }
 
 function renderConnection() {
@@ -132,7 +170,7 @@ function renderInteractionMode() {
   const select = refs.interactionModeSelect;
   const hint = refs.interactionModeHint;
   const modes = state.interactionModes || [];
-  const currentMode = session?.interaction_mode || state.defaultInteractionMode || "agent";
+  const currentMode = session?.interaction_mode || state.defaultInteractionMode || "qa";
 
   select.innerHTML = "";
   for (const mode of modes) {
@@ -151,10 +189,59 @@ function renderInteractionMode() {
 function renderComposerState() {
   const supported = Boolean(navigator.mediaDevices?.getUserMedia) && typeof window.MediaRecorder !== "undefined";
   const hasText = Boolean(refs.messageInput.value.trim());
+  const hasImages = state.pendingImages.length > 0;
   refs.messageInput.disabled = state.chatBusy;
-  refs.sendButton.disabled = state.chatBusy || !hasText;
+  refs.sendButton.disabled = state.chatBusy || (!hasText && !hasImages);
   refs.newSessionButton.disabled = state.chatBusy;
   refs.voiceButton.disabled = state.chatBusy || !supported || isVoiceBusy;
+  refs.attachImageButton.disabled = state.chatBusy;
+  renderPendingImages();
+}
+
+function renderPendingImages() {
+  refs.imagePreview.innerHTML = "";
+  refs.imagePreview.hidden = state.pendingImages.length <= 0;
+  for (const [index, image] of state.pendingImages.entries()) {
+    const item = document.createElement("div");
+    item.className = "composer-image-item";
+
+    const preview = document.createElement("img");
+    preview.className = "composer-image-thumb";
+    preview.alt = image.name || "待发送图片";
+    preview.src = `data:${image.media_type || "image/png"};base64,${image.data}`;
+    preview.addEventListener("click", () => openImageLightbox(preview.src, preview.alt));
+    item.appendChild(preview);
+
+    const removeButton = document.createElement("button");
+    removeButton.className = "composer-image-remove";
+    removeButton.type = "button";
+    removeButton.title = "删除图片";
+    removeButton.setAttribute("aria-label", "删除图片");
+    removeButton.textContent = "×";
+    removeButton.addEventListener("click", () => removePendingImage(index));
+    item.appendChild(removeButton);
+
+    refs.imagePreview.appendChild(item);
+  }
+}
+
+function removePendingImage(index) {
+  state.pendingImages.splice(index, 1);
+  setComposerStatus(state.pendingImages.length > 0 ? `已添加 ${state.pendingImages.length} 张图片` : "");
+  renderComposerState();
+}
+
+function openImageLightbox(src, alt = "图片预览") {
+  refs.imageLightboxImg.src = src;
+  refs.imageLightboxImg.alt = alt;
+  refs.imageLightbox.hidden = false;
+  document.body.classList.add("lightbox-open");
+}
+
+function closeImageLightbox() {
+  refs.imageLightbox.hidden = true;
+  refs.imageLightboxImg.removeAttribute("src");
+  document.body.classList.remove("lightbox-open");
 }
 
 function renderAll() {
@@ -167,11 +254,31 @@ function renderAll() {
 }
 
 function upsertSession(session) {
+  preserveLocalImagePreviews(session);
   const index = state.sessions.findIndex((item) => item.id === session.id);
   if (index >= 0) {
     state.sessions.splice(index, 1, session);
   } else {
     state.sessions.unshift(session);
+  }
+}
+
+function preserveLocalImagePreviews(incomingSession) {
+  const existing = state.sessions.find((item) => item.id === incomingSession.id);
+  if (!existing?.messages?.length || !incomingSession?.messages?.length) return;
+  const localImageMessages = existing.messages.filter((message) => Array.isArray(message.images) && message.images.length > 0);
+  if (localImageMessages.length <= 0) return;
+
+  for (const localMessage of localImageMessages) {
+    const target = incomingSession.messages.find(
+      (message) =>
+        message.role === localMessage.role &&
+        !Array.isArray(message.images) &&
+        String(message.content || "").trim() === String(localMessage.content || "").trim(),
+    );
+    if (target) {
+      target.images = localMessage.images;
+    }
   }
 }
 
@@ -191,14 +298,14 @@ function ensureSessionForSending() {
     title: "新会话",
     preview: "暂无消息",
     messages: [],
-    interaction_mode: state.defaultInteractionMode || "agent",
+    interaction_mode: state.defaultInteractionMode || "qa",
   };
   state.sessions.unshift(draftSession);
   state.activeSessionId = draftSessionId;
   return draftSession;
 }
 
-function appendOptimisticMessages(sessionId, content) {
+function appendOptimisticMessages(sessionId, content, images = []) {
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) return null;
 
@@ -210,6 +317,7 @@ function appendOptimisticMessages(sessionId, content) {
       id: `${pendingId}-user`,
       role: "user",
       content,
+      images,
       created_at: createdAt,
       pending: true,
     },
@@ -292,13 +400,19 @@ function setComposerStatus(text = "", tone = "") {
 async function sendMessage() {
   if (state.chatBusy) return;
   const content = refs.messageInput.value.trim();
-  if (!content) return;
+  const images = state.pendingImages;
+  if (!content && images.length <= 0) return;
+  const previewContent = images.length > 0 ? `${content || "图片"} [${images.length} 张图片]` : content;
   refs.messageInput.value = "";
+  state.pendingImages = [];
+  setComposerStatus("");
+  renderComposerState();
   await sendChatPayload({
-    previewContent: content,
+    previewContent,
     requestPath: "/api/chat/send",
     requestBody: {
       content,
+      images,
     },
   });
 }
@@ -310,7 +424,7 @@ async function sendChatPayload({ previewContent, requestPath, requestBody }) {
   }
   state.chatBusy = true;
   const session = ensureSessionForSending();
-  const pendingId = appendOptimisticMessages(session.id, previewContent);
+  const pendingId = appendOptimisticMessages(session.id, previewContent, requestBody.images || []);
   setComposerStatus("");
   renderAll();
   try {
@@ -318,14 +432,14 @@ async function sendChatPayload({ previewContent, requestPath, requestBody }) {
       const created = await request("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
-          interaction_mode: session.interaction_mode || state.defaultInteractionMode || "agent",
+          interaction_mode: session.interaction_mode || state.defaultInteractionMode || "qa",
         }),
       });
       state.activeSessionId = created.active_session_id;
       state.sessions = state.sessions.filter((item) => item.id !== session.id);
       upsertSession(created.session);
       promoteSession(state.activeSessionId);
-      appendOptimisticMessages(state.activeSessionId, previewContent);
+      appendOptimisticMessages(state.activeSessionId, previewContent, requestBody.images || []);
       renderAll();
     }
 
@@ -362,7 +476,7 @@ async function createSession() {
     const data = await request("/api/sessions", {
       method: "POST",
       body: JSON.stringify({
-        interaction_mode: refs.interactionModeSelect.value || state.defaultInteractionMode || "agent",
+        interaction_mode: refs.interactionModeSelect.value || state.defaultInteractionMode || "qa",
       }),
     });
     state.activeSessionId = data.active_session_id;
@@ -379,7 +493,7 @@ async function createSession() {
 async function updateInteractionMode() {
   if (state.chatBusy) return;
   const session = activeSession();
-  const interactionMode = refs.interactionModeSelect.value || state.defaultInteractionMode || "agent";
+  const interactionMode = refs.interactionModeSelect.value || state.defaultInteractionMode || "qa";
   if (!session || String(session.id || "").startsWith("draft-")) {
     state.defaultInteractionMode = interactionMode;
     if (session) {
@@ -583,6 +697,89 @@ function defaultVoiceFilename(mimeType) {
   return "voice.webm";
 }
 
+async function handleImageSelection(event) {
+  const files = Array.from(event.target.files || []);
+  refs.imageInput.value = "";
+  await addImageFiles(files);
+}
+
+async function addImageFiles(files) {
+  if (files.length <= 0) return;
+  try {
+    const availableSlots = Math.max(0, 4 - state.pendingImages.length);
+    if (availableSlots <= 0) {
+      setComposerStatus("最多只能添加 4 张图片", "error");
+      return;
+    }
+    const selectedFiles = files.slice(0, availableSlots);
+    const images = [];
+    for (const file of selectedFiles) {
+      images.push(await fileToImageAttachment(file));
+    }
+    state.pendingImages = [...state.pendingImages, ...images];
+    setComposerStatus(`已添加 ${state.pendingImages.length} 张图片`);
+    renderComposerState();
+  } catch (error) {
+    setComposerStatus(error.message || "图片添加失败", "error");
+  }
+}
+
+function fileToImageAttachment(file) {
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+  if (!allowedTypes.has(file.type)) {
+    return Promise.reject(new Error(`不支持的图片类型：${file.type || file.name}`));
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    return Promise.reject(new Error("单张图片不能超过 5MB"));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const data = result.includes(",") ? result.split(",", 2)[1] : result;
+      resolve({
+        name: file.name,
+        media_type: file.type,
+        data,
+      });
+    };
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleComposerPaste(event) {
+  const files = imageFilesFromClipboard(event.clipboardData);
+  if (files.length <= 0) return;
+  event.preventDefault();
+  await addImageFiles(files);
+}
+
+function handleComposerDragOver(event) {
+  if (imageFilesFromDataTransfer(event.dataTransfer).length <= 0) return;
+  event.preventDefault();
+}
+
+async function handleComposerDrop(event) {
+  const files = imageFilesFromDataTransfer(event.dataTransfer);
+  if (files.length <= 0) return;
+  event.preventDefault();
+  await addImageFiles(files);
+}
+
+function imageFilesFromClipboard(clipboardData) {
+  if (!clipboardData?.items) return [];
+  return Array.from(clipboardData.items)
+    .filter((item) => item.kind === "file" && String(item.type || "").startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+}
+
+function imageFilesFromDataTransfer(dataTransfer) {
+  if (!dataTransfer?.files) return [];
+  return Array.from(dataTransfer.files).filter((file) => String(file.type || "").startsWith("image/"));
+}
+
 refs.sendButton.addEventListener("click", sendMessage);
 refs.newSessionButton.addEventListener("click", createSession);
 refs.connectionForm.addEventListener("submit", connectRobot);
@@ -590,6 +787,14 @@ refs.disconnectButton.addEventListener("click", disconnectRobot);
 refs.passwordToggle.addEventListener("click", togglePasswordVisibility);
 refs.voiceButton.addEventListener("click", toggleVoiceRecording);
 refs.interactionModeSelect.addEventListener("change", updateInteractionMode);
+refs.attachImageButton.addEventListener("click", () => refs.imageInput.click());
+refs.imageInput.addEventListener("change", handleImageSelection);
+refs.imageLightboxClose.addEventListener("click", closeImageLightbox);
+refs.imageLightbox.addEventListener("click", (event) => {
+  if (event.target === refs.imageLightbox) {
+    closeImageLightbox();
+  }
+});
 refs.messageInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -597,6 +802,14 @@ refs.messageInput.addEventListener("keydown", (event) => {
   }
 });
 refs.messageInput.addEventListener("input", renderComposerState);
+refs.messageInput.addEventListener("paste", handleComposerPaste);
+refs.messageInput.addEventListener("dragover", handleComposerDragOver);
+refs.messageInput.addEventListener("drop", handleComposerDrop);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !refs.imageLightbox.hidden) {
+    closeImageLightbox();
+  }
+});
 
 bootstrap().catch((error) => {
   window.alert(`初始化失败：${error.message}`);

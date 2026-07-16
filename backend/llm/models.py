@@ -10,7 +10,7 @@ LLMRole = Literal["system", "user", "assistant", "tool"]
 @dataclass
 class LLMMessage:
     role: LLMRole
-    content: str
+    content: str | list[dict[str, Any]]
 
 
 @dataclass

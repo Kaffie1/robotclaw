@@ -42,7 +42,7 @@ class RuntimeState:
     session_id: str
     task_id: str
     user_query: str
-    interaction_mode_snapshot: InteractionMode = "agent"
+    interaction_mode_snapshot: InteractionMode = "qa"
     route: str = ""
     matched_playbook_id: str = ""
     current_step: str = ""

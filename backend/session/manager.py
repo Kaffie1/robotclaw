@@ -8,6 +8,7 @@ from backend.session.history import build_preview, serialize_messages
 from backend.session.models import ChatTurn, SessionState, TaskState, TimestampSet, UserIdentity, normalize_interaction_mode
 from backend.session.store import SessionStore
 from backend.shared import DEFAULT_INTERACTION_MODE, infer_title, next_session_id, next_task_id, now_hhmm, now_iso
+from backend.shared.question_log import append_question
 
 
 class SessionManager:
@@ -65,6 +66,7 @@ class SessionManager:
             memory.chat_history.append(ChatTurn(role=role, content=content, created_at=now_hhmm()))
             memory.latest_summary = content.replace("\n", " ").strip()[:120]
             if role == "user":
+                append_question(session_id, content)
                 memory.topic_stack.append(content.strip()[:80])
                 memory.topic_stack = memory.topic_stack[-10:]
             session = self._store.get_session(session_id)
