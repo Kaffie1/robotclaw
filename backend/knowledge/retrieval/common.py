@@ -60,7 +60,9 @@ def iter_knowledge_files() -> list[Path]:
         [
             path
             for path in root.rglob("*")
-            if path.is_file() and path.suffix.lower() in SUPPORTED_FILE_SUFFIXES
+            if path.is_file()
+            and path.suffix.lower() in SUPPORTED_FILE_SUFFIXES
+            and not path.relative_to(root).parts[:1] == ("new",)
         ]
     )
 

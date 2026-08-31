@@ -19,7 +19,7 @@ from .models import (
     VectorRecord,
 )
 from .service import KnowledgeService
-from .services import ingest_file, preview_split_file, rebuild_vectorstore_from_knowledge_dir
+from .services import ingest_file, ingest_new_files, preview_split_file, rebuild_vectorstore_from_knowledge_dir
 from .vectorstore import (
     KnowledgeVectorStoreHandle,
     build_vectorstore,
@@ -65,6 +65,7 @@ __all__ = [
     "compute_confidence",
     "get_embeddings",
     "ingest_file",
+    "ingest_new_files",
     "load_all_documents",
     "load_vectorstore",
     "preview_split_file",

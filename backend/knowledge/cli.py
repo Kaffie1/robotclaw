@@ -7,6 +7,7 @@ from typing import Any
 from .services import (
     delete_knowledge_file,
     ingest_file,
+    ingest_new_files,
     list_knowledge_files,
     preview_split_file,
     rebuild_vectorstore_from_knowledge_dir,
@@ -27,8 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
     preview_parser.add_argument("file_path", help="本地文件路径")
     preview_parser.add_argument("--source-name", default="", help="预览时使用的源文件名")
 
-    ingest_parser = subparsers.add_parser("ingest", help="导入文件到知识库并重建向量库")
-    ingest_parser.add_argument("file_path", help="本地文件路径")
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="导入文件到知识库并重建向量库；不传文件时处理 data/knowledge/new",
+    )
+    ingest_parser.add_argument("file_path", nargs="?", help="本地文件路径；不传则批处理 data/knowledge/new")
     ingest_parser.add_argument("--source-name", default="", help="入库后的文件名")
     ingest_parser.add_argument(
         "--replace-existing",
@@ -62,6 +66,10 @@ def main() -> None:
         return
 
     if args.command == "ingest":
+        if not args.file_path:
+            result = ingest_new_files(replace_existing=bool(args.replace_existing))
+            _print_json(result)
+            return
         result = ingest_file(
             args.file_path,
             source_name=str(args.source_name or "").strip() or None,

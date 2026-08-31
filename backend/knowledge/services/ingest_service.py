@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from ..ingestion.loader import load_documents
+from ..ingestion.loader import SUPPORTED_FILE_SUFFIXES, load_documents
 from ..ingestion.splitter import split_documents
 from ..retrieval.common import iter_knowledge_files, knowledge_docs_dir
 from ..vectorstore import build_vectorstore
@@ -22,6 +22,102 @@ def preview_split_file(file_path: str, source_name: str | None = None) -> dict:
         "source_name": source_name or file_path,
         "chunk_lengths": [len(chunk.page_content) for chunk in chunks],
     }
+
+
+def _knowledge_relative_name(path: Path) -> str:
+    root = knowledge_docs_dir()
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return path.name
+
+
+def iter_pending_new_files() -> list[Path]:
+    new_dir = knowledge_docs_dir() / "new"
+    if not new_dir.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in new_dir.rglob("*")
+            if path.is_file() and path.suffix.lower() in SUPPORTED_FILE_SUFFIXES
+        ]
+    )
+
+
+def ingest_new_files(replace_existing: bool = True) -> dict:
+    root = knowledge_docs_dir()
+    new_dir = root / "new"
+    finish_dir = root / "finish"
+    finish_dir.mkdir(parents=True, exist_ok=True)
+
+    files = iter_pending_new_files()
+    processed: list[dict] = []
+    failed: list[dict] = []
+
+    if not files:
+        return {
+            "pending_dir": str(new_dir),
+            "finish_dir": str(finish_dir),
+            "discovered": 0,
+            "processed": [],
+            "processed_count": 0,
+            "failed": [],
+            "failed_count": 0,
+            "replace_existing": replace_existing,
+            "rebuild_skipped": True,
+            "reason": "data/knowledge/new 下没有待处理文件",
+        }
+
+    for source_path in files:
+        relative_name = source_path.relative_to(new_dir)
+        target_path = finish_dir / relative_name
+        try:
+            target_filename = str(target_path.relative_to(root))
+            docs = load_documents(source_path, source_name=target_filename)
+            chunks = split_documents(docs)
+            if not chunks:
+                raise RuntimeError("文件切分结果为空")
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            if target_path.exists():
+                if not replace_existing:
+                    raise RuntimeError(f"目标文件已存在：{target_filename}")
+                target_path.unlink()
+            shutil.move(str(source_path), str(target_path))
+            processed.append(
+                {
+                    "source": str(source_path),
+                    "target_filename": target_filename,
+                    "target_path": str(target_path),
+                    "documents": len(docs),
+                    "chunks": len(chunks),
+                    "chunk_lengths": [len(chunk.page_content) for chunk in chunks],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - 批处理要保留单文件失败信息并继续处理后续文件
+            failed.append(
+                {
+                    "source": str(source_path),
+                    "target_filename": str((finish_dir / relative_name).relative_to(root)),
+                    "error": str(exc),
+                }
+            )
+
+    stats = rebuild_vectorstore_from_knowledge_dir()
+    stats.update(
+        {
+            "pending_dir": str(new_dir),
+            "finish_dir": str(finish_dir),
+            "discovered": len(files),
+            "processed": processed,
+            "processed_count": len(processed),
+            "failed": failed,
+            "failed_count": len(failed),
+            "replace_existing": replace_existing,
+        }
+    )
+    return stats
 
 
 def rebuild_vectorstore_from_knowledge_dir() -> dict:
@@ -84,6 +180,7 @@ def ingest_file(
         {
             "target_filename": target_filename,
             "target_path": str(target_path),
+            "knowledge_filename": _knowledge_relative_name(target_path),
             "replace_existing": replace_existing,
         }
     )

@@ -174,10 +174,6 @@ def build_vectorstore(
     replace_existing: bool = True,
 ) -> KnowledgeVectorStoreHandle:
     global _VECTORSTORE_CACHE
-    if replace_existing:
-        reset_vectorstore(silent=True)
-
-    ensure_vectorstore_dir()
     embeddings = get_embeddings()
     texts = [chunk.page_content for chunk in chunks]
     vectors = embeddings.embed_documents(texts) if texts else []
@@ -190,6 +186,8 @@ def build_vectorstore(
         records=records,
         embedding_signature=_current_embedding_signature(),
     )
+    if replace_existing:
+        _VECTORSTORE_CACHE = None
     _dump_handle(handle)
     _VECTORSTORE_CACHE = handle
     return handle
