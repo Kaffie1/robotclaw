@@ -48,11 +48,14 @@ def route_after_interpret(state: ChatGraphState) -> str:
     result_kind = str(state.get("result_kind") or "").strip().lower()
     loop_count = int(state.get("model_loop_count") or 0)
     if result_kind in {"final", "clarify", "confirmation"}:
+        response_mode = str(state.get("response_mode") or "").strip().lower()
+        if response_mode == "answer" and result_kind == "final":
+            return "done"
         return "summarize"
     if loop_count >= 6:
         return "summarize"
     if result_kind == "tool_call":
-        return "call_tools"
+        return "retry"
     return "retry"
 
 

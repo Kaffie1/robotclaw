@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import time
 
 from backend.gateway.models import ChatRequest, ChatResponse
 from backend.langgraph import run_chat_graph
 from backend.knowledge import KnowledgeService
-from backend.llm import LLMRegistry
+from backend.llm import LLMClient, LLMRegistry
+from backend.llm.config import llm_config_from_settings
+from backend.llm.metrics import collect_llm_metrics, summarize_llm_metrics
 from backend.memory import MemoryManager
-from backend.playbook import PlaybookEngine
 from backend.runtime.models import DiagnosisSummary, EvidenceItem, RouteDecision, RuntimeEnvelope, RuntimeState
 from backend.runtime.workflow import WorkflowEventBus, WorkflowStore, build_resume_token
 from backend.runtime.workflow.models import WorkflowEvent
 from backend.shared import get_logger, infer_title, next_event_id, next_request_id, next_resume_token, now_iso
-from backend.tools import ToolExecutor
 
 
 logger = get_logger("runtime.service")
@@ -22,16 +23,12 @@ class RuntimeService:
     def __init__(
         self,
         *,
-        playbook_engine: PlaybookEngine | None = None,
         knowledge_service: KnowledgeService | None = None,
         llm_registry: LLMRegistry | None = None,
-        tool_executor: ToolExecutor | None = None,
         memory_manager: MemoryManager | None = None,
     ) -> None:
-        self.playbook_engine = playbook_engine or PlaybookEngine()
         self.knowledge_service = knowledge_service or KnowledgeService()
         self.llm_registry = llm_registry or LLMRegistry()
-        self.tool_executor = tool_executor or ToolExecutor()
         self.memory_manager = memory_manager or MemoryManager()
         self.workflow_store = WorkflowStore()
         self.event_bus = WorkflowEventBus()
@@ -86,18 +83,25 @@ class RuntimeService:
             event_type="runtime.started",
             payload={"request_id": request.request_id, "query": request.content},
         )
-        state, diagnosis = run_chat_graph(
-            request=request,
-            envelope=envelope,
-            state=state,
-            connected=connected,
-            playbook_engine=self.playbook_engine,
-            knowledge_service=self.knowledge_service,
-            llm_registry=self.llm_registry,
-            tool_executor=self.tool_executor,
-            memory_manager=self.memory_manager,
-            workflow_store=self.workflow_store,
-            event_bus=self.event_bus,
+        started_at = time.perf_counter()
+        with collect_llm_metrics() as llm_metrics:
+            state, diagnosis = run_chat_graph(
+                request=request,
+                envelope=envelope,
+                state=state,
+                connected=connected,
+                knowledge_service=self.knowledge_service,
+                llm_registry=self.llm_registry,
+                get_llm_client=self._build_request_llm_client(request),
+                top_k=self._request_top_k(request),
+                memory_manager=self.memory_manager,
+                workflow_store=self.workflow_store,
+                event_bus=self.event_bus,
+            )
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        metrics = self._turn_metrics_payload(
+            elapsed_ms=elapsed_ms,
+            llm_metrics=summarize_llm_metrics(llm_metrics),
         )
         if state.current_step in {"waiting_confirm", "waiting_input"} and not state.resume_token:
             resume_token = build_resume_token(
@@ -138,11 +142,12 @@ class RuntimeService:
                 "evidence": [item.content for item in diagnosis.evidence],
                 "solutions": [asdict(item) for item in diagnosis.solutions],
                 "planned_tools": [dict(item) for item in state.planned_tools],
-                "tool_results": self.tool_executor.to_payload(state.tool_results),
+                "tool_results": [dict(item) for item in state.tool_results],
                 "title_hint": infer_title(request.content, envelope.task.title),
                 "events": self.drain_events(envelope.task.task_id),
                 "confirmation": self._confirmation_payload(envelope.task.task_id),
                 "llm_debug": self._llm_debug_payload(envelope.task.task_id),
+                "metrics": metrics,
             },
         )
         logger.info(
@@ -153,6 +158,17 @@ class RuntimeService:
             state.matched_playbook_id,
         )
         return state, diagnosis, response
+
+    def _turn_metrics_payload(self, *, elapsed_ms: int, llm_metrics: dict) -> dict:
+        return {
+            "elapsed_ms": max(0, int(elapsed_ms)),
+            "elapsed_seconds": round(max(0, int(elapsed_ms)) / 1000, 2),
+            "llm_call_count": int(llm_metrics.get("llm_call_count") or 0),
+            "llm_duration_ms": int(llm_metrics.get("llm_duration_ms") or 0),
+            "input_tokens": llm_metrics.get("input_tokens"),
+            "output_tokens": llm_metrics.get("output_tokens"),
+            "total_tokens": llm_metrics.get("total_tokens"),
+        }
 
     def interrupt_task(self, session_id: str, task_id: str) -> str:
         logger.info("Interrupt requested session_id=%s task_id=%s", session_id, task_id)
@@ -265,6 +281,23 @@ class RuntimeService:
 
     def llm_status(self) -> dict:
         return self.llm_registry.status_payload()
+
+    def _build_request_llm_client(self, request: ChatRequest):
+        settings = dict(request.llm_settings or {})
+        if not any(str(value or "").strip() for value in settings.values()):
+            return self.llm_registry.get_active_client
+        base_config = self.llm_registry.get_active_config()
+        client = LLMClient(config=llm_config_from_settings(settings, base=base_config))
+        return lambda: client
+
+    def _request_top_k(self, request: ChatRequest) -> int:
+        raw_top_k = str((request.llm_settings or {}).get("TOP_K") or "").strip()
+        if not raw_top_k:
+            return 4
+        try:
+            return max(1, int(raw_top_k))
+        except ValueError:
+            return 4
 
     def activate_llm_profile(self, profile_id: str) -> dict:
         logger.info("Switching active llm profile to %s", profile_id)

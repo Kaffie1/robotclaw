@@ -4,6 +4,7 @@ from .ingest_service import (
     list_knowledge_files,
     preview_split_file,
     rebuild_vectorstore_from_knowledge_dir,
+    upsert_file,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "list_knowledge_files",
     "preview_split_file",
     "rebuild_vectorstore_from_knowledge_dir",
+    "upsert_file",
 ]

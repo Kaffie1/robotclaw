@@ -24,7 +24,7 @@ def _faq_score(doc: Document, query: str) -> float:
         if term in title:
             score += 3.0
         if term in filename:
-            score += 2.0
+            score += 6.0 + (filename.count(term) * 0.5)
         if term in content:
             score += 0.5
     return score

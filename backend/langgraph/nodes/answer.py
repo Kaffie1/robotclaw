@@ -4,13 +4,11 @@ import json
 import re
 from typing import Any
 
-from backend.langgraph.nodes.confirm import await_confirmation_node
 from backend.langgraph.prompts import (
     build_answer_disallow_command_retry_prompt,
     build_answer_invalid_json_retry_prompt,
     build_answer_missing_protocol_retry_prompt,
     build_answer_user_prompt,
-    build_fault_chat_system_prompt,
     build_knowledge_answer_system_prompt,
     build_tool_feedback_prompt,
 )
@@ -326,11 +324,9 @@ def call_tools_node(state: dict) -> dict:
 
 
 def _build_system_prompt(state: dict, *, response_mode: str) -> str:
-    if response_mode == "answer":
-        return build_knowledge_answer_system_prompt()
-    registry = getattr(state["tool_executor"], "registry", None)
-    tool_items = registry.list_definitions() if registry and hasattr(registry, "list_definitions") else []
-    return build_fault_chat_system_prompt(tool_items)
+    del state
+    del response_mode
+    return build_knowledge_answer_system_prompt()
 
 
 def _build_history_messages(history: list[dict[str, str]]) -> list[LLMMessage]:

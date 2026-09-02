@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 
 from backend.knowledge import (
     build_chunk_key,
+    extract_terms,
     load_all_documents,
     retrieve_bm25_documents,
     retrieve_faq_documents,
@@ -21,14 +22,15 @@ from backend.shared import TOP_K, get_logger
 
 logger = get_logger("langgraph.knowledge")
 
-def retrieve_knowledge(knowledge_service, query: str, topic: str) -> dict[str, object]:
+def retrieve_knowledge(knowledge_service, query: str, topic: str, top_k: int = TOP_K) -> dict[str, object]:
     del knowledge_service
     del topic
     docs = load_all_documents()
-    faq_docs = retrieve_faq_documents(query=query, top_k=TOP_K, docs=docs) if docs else []
-    bm25_docs = retrieve_bm25_documents(query=query, top_k=TOP_K, docs=docs) if docs else []
+    top_k = max(1, int(top_k or TOP_K))
+    faq_docs = retrieve_faq_documents(query=query, top_k=top_k, docs=docs) if docs else []
+    bm25_docs = retrieve_bm25_documents(query=query, top_k=top_k, docs=docs) if docs else []
     try:
-        vector_docs = retrieve_vector_documents(query=query, top_k=TOP_K)
+        vector_docs = retrieve_vector_documents(query=query, top_k=top_k)
     except Exception:
         vector_docs = []
     merged_docs = _merge_ranked_documents([faq_docs, bm25_docs, vector_docs])
@@ -43,7 +45,7 @@ def retrieve_knowledge(knowledge_service, query: str, topic: str) -> dict[str, o
             "citations": [],
             "channels": [],
         }
-    result = select_evidence(docs=merged_docs, query=query)
+    result = select_evidence(docs=merged_docs, query=query, top_k=top_k)
     return {
         "summary": "已检索到相关知识片段",
         "detail": "；".join(item.snippet for item in result.evidence[:3]) if result.evidence else "已命中相关知识。",
@@ -74,34 +76,38 @@ def load_knowledge_source_docs_node(state: dict) -> dict:
         docs = []
 
     short_memory.scratchpad["knowledge_source_docs"] = docs
-    logger.info("知识检索 Source | hits=%d | query=%s", len(docs), query[:80])
+    terms = extract_terms(query)
+    logger.info("知识检索 Source | hits=%d | terms=%s | query=%s", len(docs), terms[:24], query[:80])
     return {"runtime_state": runtime_state, "short_memory": short_memory, "knowledge_source_docs": docs}
 
 
 def retrieve_faq_knowledge_node(state: dict) -> dict:
     request = state["request"]
+    top_k = _state_top_k(state)
     source_docs = list(state.get("knowledge_source_docs") or [])
-    faq_docs = retrieve_faq_documents(query=request.content, top_k=TOP_K, docs=source_docs) if source_docs else []
-    logger.info("知识检索 FAQ | top_k=%d | hits=%d | query=%s", TOP_K, len(faq_docs), request.content[:80])
+    faq_docs = retrieve_faq_documents(query=request.content, top_k=top_k, docs=source_docs) if source_docs else []
+    logger.info("知识检索 FAQ | top_k=%d | hits=%d | query=%s", top_k, len(faq_docs), request.content[:80])
     return {"knowledge_faq_docs": faq_docs}
 
 
 def retrieve_bm25_knowledge_node(state: dict) -> dict:
     request = state["request"]
+    top_k = _state_top_k(state)
     source_docs = list(state.get("knowledge_source_docs") or [])
-    bm25_docs = retrieve_bm25_documents(query=request.content, top_k=TOP_K, docs=source_docs) if source_docs else []
-    logger.info("知识检索 BM25 | top_k=%d | hits=%d | query=%s", TOP_K, len(bm25_docs), request.content[:80])
+    bm25_docs = retrieve_bm25_documents(query=request.content, top_k=top_k, docs=source_docs) if source_docs else []
+    logger.info("知识检索 BM25 | top_k=%d | hits=%d | query=%s", top_k, len(bm25_docs), request.content[:80])
     return {"knowledge_bm25_docs": bm25_docs}
 
 
 def retrieve_vector_knowledge_node(state: dict) -> dict:
     request = state["request"]
+    top_k = _state_top_k(state)
     try:
-        vector_docs = retrieve_vector_documents(query=request.content, top_k=TOP_K)
+        vector_docs = retrieve_vector_documents(query=request.content, top_k=top_k)
     except Exception as exc:
         logger.warning("知识检索 Vector 失败，继续降级到 FAQ/BM25 | error=%s", exc)
         vector_docs = []
-    logger.info("知识检索 Vector | top_k=%d | hits=%d | query=%s", TOP_K, len(vector_docs), request.content[:80])
+    logger.info("知识检索 Vector | top_k=%d | hits=%d | query=%s", top_k, len(vector_docs), request.content[:80])
     return {"knowledge_vector_docs": vector_docs}
 
 
@@ -110,6 +116,7 @@ def merge_knowledge_retrieval_node(state: dict) -> dict:
     diagnosis = state["diagnosis"]
     short_memory = state["short_memory"]
     request = state["request"]
+    top_k = _state_top_k(state)
 
     faq_docs = list(state.get("knowledge_faq_docs") or [])
     bm25_docs = list(state.get("knowledge_bm25_docs") or [])
@@ -118,7 +125,7 @@ def merge_knowledge_retrieval_node(state: dict) -> dict:
 
     logger.info(
         "知识检索 Merge | top_k=%d | faq_hits=%d | bm25_hits=%d | vector_hits=%d | merged_hits=%d",
-        TOP_K,
+        top_k,
         len(faq_docs),
         len(bm25_docs),
         len(vector_docs),
@@ -137,7 +144,7 @@ def merge_knowledge_retrieval_node(state: dict) -> dict:
             "channels": [],
         }
     else:
-        result = select_evidence(docs=merged_docs, query=request.content)
+        result = select_evidence(docs=merged_docs, query=request.content, top_k=top_k)
         knowledge = {
             "summary": "已检索到相关知识片段",
             "detail": "；".join(item.snippet for item in result.evidence[:3]) if result.evidence else "已命中相关知识。",
@@ -188,6 +195,13 @@ def merge_knowledge_retrieval_node(state: dict) -> dict:
         "knowledge": knowledge,
         "knowledge_merged_docs": merged_docs,
     }
+
+
+def _state_top_k(state: dict) -> int:
+    try:
+        return max(1, int(state.get("top_k") or TOP_K))
+    except (TypeError, ValueError):
+        return TOP_K
 
 
 def assemble_knowledge_context_node(state: dict) -> dict:

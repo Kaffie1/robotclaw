@@ -195,6 +195,56 @@ def build_vectorstore(
     return handle
 
 
+def upsert_vectorstore_documents(
+    chunks: list[Document],
+    *,
+    source_path: Path,
+    filename: str,
+) -> KnowledgeVectorStoreHandle:
+    """替换单个知识文件对应的向量记录，保留其他文件已有切分结果。"""
+
+    global _VECTORSTORE_CACHE
+    try:
+        existing_handle = load_vectorstore()
+        existing_records = list(existing_handle.records)
+    except RuntimeError:
+        existing_records = []
+
+    source_key = str(source_path.resolve())
+    filename_key = str(filename)
+    retained_records = [
+        record
+        for record in existing_records
+        if str((record.metadata or {}).get("source", "")) != source_key
+        and str((record.metadata or {}).get("filename", "")) != filename_key
+    ]
+
+    existing_chunk_ids = [
+        int((record.metadata or {}).get("chunk_id"))
+        for record in retained_records
+        if str((record.metadata or {}).get("chunk_id", "")).isdigit()
+    ]
+    next_chunk_id = (max(existing_chunk_ids) + 1) if existing_chunk_ids else 0
+    for offset, chunk in enumerate(chunks):
+        chunk.metadata["chunk_id"] = next_chunk_id + offset
+
+    embeddings = get_embeddings()
+    texts = [chunk.page_content for chunk in chunks]
+    vectors = embeddings.embed_documents(texts) if texts else []
+    new_records = [
+        _record_from_document(chunk, vector)
+        for chunk, vector in zip(chunks, vectors)
+    ]
+    handle = KnowledgeVectorStoreHandle(
+        persist_dir=get_vectorstore_dir(),
+        records=[*retained_records, *new_records],
+        embedding_signature=_current_embedding_signature(),
+    )
+    _dump_handle(handle)
+    _VECTORSTORE_CACHE = handle
+    return handle
+
+
 def load_vectorstore() -> KnowledgeVectorStoreHandle:
     global _VECTORSTORE_CACHE
     if _VECTORSTORE_CACHE is not None:

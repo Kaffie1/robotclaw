@@ -12,6 +12,7 @@ class ChatRequest:
     user_id: str
     content: str
     images: list[dict[str, Any]] = field(default_factory=list)
+    llm_settings: dict[str, Any] = field(default_factory=dict)
     request_id: str = ""
     interrupt: bool = False
     resume: bool = False

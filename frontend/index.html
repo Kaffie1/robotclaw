@@ -24,7 +24,7 @@
           <div class="session-list" id="sessionList"></div>
         </section>
 
-        <button class="settings-link" type="button">
+        <button class="settings-link" id="settingsButton" type="button">
           <span class="settings-icon">⚙</span>
           <span>设置</span>
         </button>
@@ -35,13 +35,6 @@
           <div class="chat-scroll" id="chatScroll"></div>
 
           <div class="composer">
-            <div class="composer-modebar">
-              <label class="mode-field" for="interactionModeSelect">
-                <span class="mode-label">当前模式</span>
-                <select id="interactionModeSelect" class="mode-select"></select>
-              </label>
-              <div class="mode-hint" id="interactionModeHint"></div>
-            </div>
             <textarea
               id="messageInput"
               class="composer-input"
@@ -53,7 +46,6 @@
               <div class="composer-tools">
                 <button class="icon-button sprite sprite-attach" id="attachImageButton" type="button" title="添加图片"></button>
                 <input id="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden />
-                <button class="icon-button sprite sprite-command" type="button" title="命令"></button>
               </div>
               <div class="composer-primary-actions">
                 <button class="voice-button" id="voiceButton" type="button" title="语音输入" aria-pressed="false">
@@ -72,80 +64,6 @@
           </div>
         </section>
       </main>
-
-      <aside class="connection-panel">
-        <h2 class="panel-heading">机器人连接</h2>
-
-        <section class="connection-card" id="connectionCard">
-          <div class="connection-topline">
-            <div class="connection-status" id="connectionStatus">
-              <span class="status-dot"></span>
-              <span class="status-text">未连接</span>
-            </div>
-            <button class="card-menu" type="button" title="更多">⋮</button>
-          </div>
-
-          <div class="connection-summary">
-            <div class="robot-avatar" id="robotAvatar" aria-hidden="true">
-              <img src="./assets/robot-full.png" alt="" />
-            </div>
-            <div class="robot-meta">
-              <div class="robot-name-row">
-                <span class="robot-name" id="robotName">未选择机器人</span>
-              </div>
-              <div class="robot-detail-row">
-                <span class="robot-detail-label">IP</span>
-                <span class="robot-detail-value" id="robotHost">-</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="connection-hero sprite sprite-robot" aria-hidden="true"></div>
-        </section>
-
-        <form class="connection-form" id="connectionForm">
-          <label class="field">
-            <span>机器人名称</span>
-            <input id="connectName" name="name" type="text" value="naviai" placeholder="naviai" />
-          </label>
-          <label class="field">
-            <span>IP 地址</span>
-            <input id="connectHost" name="host" type="text" value="172.16.9.136" placeholder="172.16.9.136" />
-          </label>
-          <label class="field">
-            <span>登录用户</span>
-            <input id="connectUsername" name="username" type="text" value="naviai" placeholder="naviai" />
-          </label>
-          <label class="field">
-            <span>登录密码</span>
-            <div class="password-field">
-              <input id="connectPassword" name="password" type="password" value="naviai@2024" placeholder="naviai@2024" />
-              <button
-                class="password-toggle"
-                id="passwordToggle"
-                type="button"
-                title="显示密码"
-                aria-label="显示密码"
-                aria-pressed="false"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    class="eye-shape"
-                    d="M12 5C6.5 5 2.1 8.4 1 12c1.1 3.6 5.5 7 11 7s9.9-3.4 11-7c-1.1-3.6-5.5-7-11-7Zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"
-                  />
-                  <circle class="eye-pupil" cx="12" cy="12" r="2.2" />
-                  <path class="eye-slash" d="M4.5 4.5 19.5 19.5" />
-                </svg>
-              </button>
-            </div>
-          </label>
-
-          <div class="connection-actions">
-            <button class="primary-button" id="connectButton" type="submit">连接机器人</button>
-            <button class="ghost-button" id="disconnectButton" type="button">断开连接</button>
-          </div>
-        </form>
-      </aside>
     </div>
 
     <template id="messageTemplate">
@@ -165,6 +83,51 @@
     <div class="image-lightbox" id="imageLightbox" hidden>
       <button class="image-lightbox-close" id="imageLightboxClose" type="button" aria-label="关闭图片预览">×</button>
       <img class="image-lightbox-img" id="imageLightboxImg" alt="图片预览" />
+    </div>
+
+    <div class="settings-modal" id="settingsModal" hidden>
+      <form class="settings-dialog" id="settingsForm">
+        <div class="settings-dialog-header">
+          <div>
+            <div class="settings-dialog-title">设置</div>
+            <div class="settings-dialog-subtitle">API_KEY 必填，其余留空使用默认配置</div>
+          </div>
+          <button class="settings-close" id="settingsCloseButton" type="button" aria-label="关闭设置">×</button>
+        </div>
+
+        <label class="settings-field">
+          <span>API_KEY <span class="required-star">*</span></span>
+          <div class="secret-field">
+            <input id="openaiApiKeyInput" name="OPENAI_API_KEY" type="password" autocomplete="off" required />
+            <button class="secret-toggle" id="apiKeyToggleButton" type="button" aria-label="显示 API_KEY" aria-pressed="false">
+              显示
+            </button>
+          </div>
+        </label>
+        <label class="settings-field">
+          <span>BASE_URL</span>
+          <input id="openaiBaseUrlInput" name="OPENAI_BASE_URL" type="url" autocomplete="off" />
+        </label>
+        <label class="settings-field">
+          <span>MODEL</span>
+          <input id="openaiChatModelInput" name="OPENAI_CHAT_MODEL" type="text" autocomplete="off" />
+        </label>
+        <div class="settings-grid">
+          <label class="settings-field">
+            <span>TEMPERATURE</span>
+            <input id="llmTemperatureInput" name="ROBOTCLAW_LLM_TEMPERATURE" type="number" step="0.1" min="0" />
+          </label>
+          <label class="settings-field">
+            <span>TOP_K</span>
+            <input id="topKInput" name="TOP_K" type="number" step="1" min="1" />
+          </label>
+        </div>
+        <div class="settings-status" id="settingsStatus" hidden></div>
+        <div class="settings-actions">
+          <button class="ghost-button" id="settingsCancelButton" type="button">取消</button>
+          <button class="primary-button" id="settingsSaveButton" type="submit">保存</button>
+        </div>
+      </form>
     </div>
 
     <script src="./app.js"></script>

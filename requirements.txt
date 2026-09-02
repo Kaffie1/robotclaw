@@ -1,0 +1,25 @@
+# Recommended runtime: Python 3.11
+
+# Core server/runtime dependencies
+aiohttp>=3.9
+langgraph>=0.2
+langchain-core>=0.2
+langchain-openai>=0.1.20
+langchain-text-splitters>=0.2
+openai>=1.40
+paramiko>=3.4
+PyYAML>=6.0
+requests>=2.31
+
+# Local HuggingFace embedding backend used by the default .env
+langchain-huggingface>=0.0.3
+huggingface-hub>=0.23
+sentence-transformers>=2.7
+torch>=2.2
+
+# Development/test convenience
+pytest>=8.0
+
+# Note:
+# PDF/DOCX ingestion can call a local MinerU CLI via MINERU_BIN.
+# Install MinerU separately if you need local document parsing.

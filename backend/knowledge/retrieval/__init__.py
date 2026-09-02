@@ -1,6 +1,6 @@
 """知识检索导出层。"""
 
-from .common import build_chunk_key
+from .common import build_chunk_key, extract_terms
 from .faq import retrieve_faq_documents, retrieve_local_keyword_documents
 from .lexical import load_all_documents, retrieve_bm25_documents
 from .metadata_filter import retrieve_tag_filtered_documents
@@ -25,6 +25,7 @@ __all__ = [
     "RetrievalTaskRequest",
     "build_chunk_key",
     "compute_confidence",
+    "extract_terms",
     "load_all_documents",
     "rerank_documents",
     "retrieve_bm25_documents",

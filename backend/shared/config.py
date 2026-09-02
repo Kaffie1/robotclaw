@@ -21,36 +21,44 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _env_value(name: str, default: str = "", *aliases: str) -> str:
+    for candidate in (name, *aliases):
+        value = str(os.getenv(candidate) or "").strip()
+        if value:
+            return value
+    return default
+
+
 # ========== OpenAI API 配置 ==========
 OPENAI_API_KEY = str(os.getenv("OPENAI_API_KEY") or "").strip()
 OPENAI_BASE_URL = str(os.getenv("OPENAI_BASE_URL") or "").strip()
 OPENAI_CHAT_MODEL = str(os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1-mini").strip() or "gpt-4.1-mini"
 OPENAI_CHAT_TEMPERATURE = float(str(os.getenv("OPENAI_CHAT_TEMPERATURE") or "0.2").strip() or "0.2")
 OPENAI_ENABLE_REASONING_SPLIT = _env_bool("OPENAI_ENABLE_REASONING_SPLIT", False)
-OPENAI_THINK = str(os.getenv("OPENAI_THINK") or "").strip()
+OPENAI_THINK = _env_bool("OPENAI_THINK", False)
 OPENAI_ASR_MODEL = str(os.getenv("OPENAI_ASR_MODEL") or "").strip()
 
 # ========== LLM 配置 ==========
-LLM_PROVIDER = str(os.getenv("LLM_PROVIDER") or "openai").strip() or "openai"
-LLM_MODEL = str(os.getenv("LLM_MODEL") or "").strip()
-LLM_ASR_PROVIDER = str(os.getenv("LLM_ASR_PROVIDER") or "").strip()
-LLM_ASR_MODEL = str(os.getenv("LLM_ASR_MODEL") or "").strip()
-LLM_ASR_LANGUAGE = str(os.getenv("LLM_ASR_LANGUAGE") or "zh").strip() or "zh"
-LLM_TEMPERATURE = float(str(os.getenv("LLM_TEMPERATURE") or "0").strip() or "0")
-LLM_MAX_TOKENS = int(str(os.getenv("LLM_MAX_TOKENS") or "1024").strip() or "1024")
-LLM_TIMEOUT = float(str(os.getenv("LLM_TIMEOUT") or "30").strip() or "30")
-LLM_ASR_TIMEOUT = float(str(os.getenv("LLM_ASR_TIMEOUT") or "60").strip() or "60")
-LLM_API_BASE = str(os.getenv("LLM_API_BASE") or "").strip()
-LLM_API_KEY = str(os.getenv("LLM_API_KEY") or "").strip()
-LLM_PROFILES = str(os.getenv("LLM_PROFILES") or "").strip()
-LLM_ACTIVE_PROFILE = str(os.getenv("LLM_ACTIVE_PROFILE") or "").strip() or "default"
+LLM_PROVIDER = _env_value("LLM_PROVIDER", "openai", "ROBOTCLAW_LLM_PROVIDER") or "openai"
+LLM_MODEL = _env_value("LLM_MODEL", "", "ROBOTCLAW_LLM_MODEL")
+LLM_ASR_PROVIDER = _env_value("LLM_ASR_PROVIDER", "", "ROBOTCLAW_LLM_ASR_PROVIDER")
+LLM_ASR_MODEL = _env_value("LLM_ASR_MODEL", "", "ROBOTCLAW_LLM_ASR_MODEL")
+LLM_ASR_LANGUAGE = _env_value("LLM_ASR_LANGUAGE", "zh", "ROBOTCLAW_LLM_ASR_LANGUAGE") or "zh"
+LLM_TEMPERATURE = float(_env_value("LLM_TEMPERATURE", "0", "ROBOTCLAW_LLM_TEMPERATURE") or "0")
+LLM_MAX_TOKENS = int(_env_value("LLM_MAX_TOKENS", "1024", "ROBOTCLAW_LLM_MAX_TOKENS") or "1024")
+LLM_TIMEOUT = float(_env_value("LLM_TIMEOUT", "30", "ROBOTCLAW_LLM_TIMEOUT") or "30")
+LLM_ASR_TIMEOUT = float(_env_value("LLM_ASR_TIMEOUT", "60", "ROBOTCLAW_LLM_ASR_TIMEOUT") or "60")
+LLM_API_BASE = _env_value("LLM_API_BASE", "", "ROBOTCLAW_LLM_API_BASE")
+LLM_API_KEY = _env_value("LLM_API_KEY", "", "ROBOTCLAW_LLM_API_KEY")
+LLM_PROFILES = _env_value("LLM_PROFILES", "", "ROBOTCLAW_LLM_PROFILES")
+LLM_ACTIVE_PROFILE = _env_value("LLM_ACTIVE_PROFILE", "default", "ROBOTCLAW_LLM_ACTIVE_PROFILE") or "default"
 
 # ========== Embedding 配置 ==========
 EMBEDDING_PROVIDER = str(os.getenv("EMBEDDING_PROVIDER") or "huggingface").strip() or "huggingface"
 EMBEDDING_API_KEY = str(os.getenv("EMBEDDING_API_KEY") or "").strip()
 EMBEDDING_BASE_URL = str(os.getenv("EMBEDDING_BASE_URL") or "").strip()
 EMBEDDING_MODEL = str(os.getenv("EMBEDDING_MODEL") or "BAAI/bge-small-zh-v1.5").strip() or "BAAI/bge-small-zh-v1.5"
-EMBEDDING_DEVICE = str(os.getenv("EMBEDDING_DEVICE") or "cuda").strip() or "cuda"
+EMBEDDING_DEVICE = str(os.getenv("EMBEDDING_DEVICE") or "auto").strip() or "auto"
 
 # ========== MinerU 配置 ==========
 MINERU_BIN = str(os.getenv("MINERU_BIN") or "mineru").strip() or "mineru"
@@ -66,9 +74,7 @@ MINERU_SERVER_URL = str(os.getenv("MINERU_SERVER_URL") or "").strip()
 SPEECH_AUTO_SEND = True
 
 # ========== 会话模式配置 ==========
-DEFAULT_INTERACTION_MODE = str(os.getenv("DEFAULT_INTERACTION_MODE") or "qa").strip().lower() or "qa"
-if DEFAULT_INTERACTION_MODE not in {"playbook", "qa", "agent"}:
-    DEFAULT_INTERACTION_MODE = "qa"
+DEFAULT_INTERACTION_MODE = "qa"
 
 # ========== 火山 ASR 配置 ==========
 VOLCENGINE_ASR_MODEL = str(os.getenv("VOLCENGINE_ASR_MODEL") or "").strip() or "bigmodel"
@@ -95,7 +101,7 @@ CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
 
 # ========== 检索配置 ==========
-TOP_K = 4
+TOP_K = int(_env_value("TOP_K", "4", "ROBOTCLAW_TOP_K") or "4")
 LOW_CONFIDENCE_THRESHOLD = 0.45
 RERANKER_MAX_CANDIDATES = 5
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from backend.gateway.models import ChatRequest
@@ -8,39 +9,29 @@ from backend.llm import LLMRegistry
 from backend.langgraph.nodes import (
     build_messages_node,
     call_chat_model_node,
-    call_tools_node,
     assemble_knowledge_context_node,
-    await_confirmation_node,
-    classify_query_node,
     decide_knowledge_response_mode_node,
-    enter_playbook_node,
     interpret_model_output_node,
     load_knowledge_source_docs_node,
-    match_playbook_node,
     merge_knowledge_retrieval_node,
     retrieve_bm25_knowledge_node,
     retrieve_faq_knowledge_node,
     retrieve_vector_knowledge_node,
     summarize_response_node,
 )
-from backend.langgraph.prompts import build_classify_prompt, build_planner_prompt, build_route_prompt, build_summary_prompt
+from backend.langgraph.prompts import build_summary_prompt
 from backend.langgraph.router import (
     route_after_build_messages,
-    route_after_call_tools,
     route_after_interpret,
     route_after_knowledge_mode,
-    route_after_match,
 )
-from backend.langgraph.router import route_after_playbook_execution
 from backend.langgraph.state import ChatGraphState
 from backend.memory import MemoryManager
-from backend.playbook import PlaybookEngine
 from backend.runtime.models import DiagnosisSummary, RuntimeEnvelope, RuntimeState
 from backend.runtime.workflow import publish_workflow_event
 from backend.runtime.workflow.events import WorkflowEventBus
 from backend.runtime.workflow.store import WorkflowStore
 from backend.shared import get_logger
-from backend.tools import ToolExecutor
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -52,15 +43,14 @@ except Exception:
 
 logger = get_logger("langgraph.builder")
 
+ATTACHMENT_SUMMARY_PATTERN = re.compile(r"\s*\[\d+\s*张图片\]\s*")
+
 
 def build_chat_graph() -> Any:
     if StateGraph is None or START is None or END is None:
         return None
 
     graph = StateGraph(ChatGraphState)
-    graph.add_node("classify_query", classify_query_node)
-    graph.add_node("match_playbook", match_playbook_node)
-    graph.add_node("playbook_execution", enter_playbook_node)
     graph.add_node("load_knowledge_source_docs", load_knowledge_source_docs_node)
     graph.add_node("retrieve_knowledge_faq", retrieve_faq_knowledge_node)
     graph.add_node("retrieve_knowledge_bm25", retrieve_bm25_knowledge_node)
@@ -71,29 +61,9 @@ def build_chat_graph() -> Any:
     graph.add_node("build_messages", build_messages_node)
     graph.add_node("call_model", call_chat_model_node)
     graph.add_node("interpret_output", interpret_model_output_node)
-    graph.add_node("call_tools", call_tools_node)
-    graph.add_node("await_confirmation", await_confirmation_node)
     graph.add_node("summarize_response", summarize_response_node)
 
-    graph.add_edge(START, "classify_query")
-    graph.add_edge("classify_query", "match_playbook")
-    graph.add_conditional_edges(
-        "match_playbook",
-        route_after_match,
-        {
-            "playbook_execution": "playbook_execution",
-            "knowledge_selection": "load_knowledge_source_docs",
-            "summarize_response": "summarize_response",
-        },
-    )
-    graph.add_conditional_edges(
-        "playbook_execution",
-        route_after_playbook_execution,
-        {
-            "summarize": "summarize_response",
-        },
-    )
-    graph.add_edge("summarize_response", END)
+    graph.add_edge(START, "load_knowledge_source_docs")
     graph.add_edge("load_knowledge_source_docs", "retrieve_knowledge_faq")
     graph.add_edge("load_knowledge_source_docs", "retrieve_knowledge_bm25")
     graph.add_edge("load_knowledge_source_docs", "retrieve_knowledge_vector")
@@ -128,49 +98,33 @@ def build_chat_graph() -> Any:
         "interpret_output",
         route_after_interpret,
         {
+            "done": END,
             "summarize": "summarize_response",
             "retry": "call_model",
-            "call_tools": "call_tools",
         },
     )
-    graph.add_conditional_edges(
-        "call_tools",
-        route_after_call_tools,
-        {
-            "await_confirmation": "await_confirmation",
-            "summarize": "summarize_response",
-            "call_model": "call_model",
-        },
-    )
-    graph.add_edge("await_confirmation", "summarize_response")
+    graph.add_edge("summarize_response", END)
     return graph.compile()
 
 
 _CHAT_GRAPH: Any = None
 
 STEP_TO_NODE: dict[str, str] = {
-    "gateway_received": "classify_query",
-    "understand_query": "match_playbook",
-    "match_playbook": "match_playbook",
-    "playbook_execution": "playbook_execution",
+    "gateway_received": "load_knowledge_source_docs",
+    "understand_query": "load_knowledge_source_docs",
     "knowledge_selection": "load_knowledge_source_docs",
     "build_messages": "build_messages",
     "call_model": "call_model",
     "interpret_output": "interpret_output",
-    "call_tools": "call_tools",
     "tool_planning": "build_messages",
-    "waiting_confirm": "await_confirmation",
-    "waiting_input": "await_confirmation",
-    "robot_check": "call_tools",
+    "waiting_confirm": "summarize_response",
+    "waiting_input": "summarize_response",
     "problem_analysis": "call_model",
     "solution_generation": "completed",
     "completed": "completed",
 }
 
 NODE_SEQUENCE: tuple[str, ...] = (
-    "classify_query",
-    "match_playbook",
-    "playbook_execution",
     "load_knowledge_source_docs",
     "retrieve_knowledge_faq",
     "retrieve_knowledge_bm25",
@@ -181,8 +135,6 @@ NODE_SEQUENCE: tuple[str, ...] = (
     "build_messages",
     "call_model",
     "interpret_output",
-    "call_tools",
-    "await_confirmation",
     "summarize_response",
 )
 
@@ -200,10 +152,10 @@ def run_chat_graph(
     envelope: RuntimeEnvelope,
     state: RuntimeState,
     connected: bool,
-    playbook_engine: PlaybookEngine,
     knowledge_service: KnowledgeService,
     llm_registry: LLMRegistry,
-    tool_executor: ToolExecutor,
+    get_llm_client: Any | None,
+    top_k: int,
     memory_manager: MemoryManager,
     workflow_store: WorkflowStore,
     event_bus: WorkflowEventBus,
@@ -213,10 +165,10 @@ def run_chat_graph(
         envelope=envelope,
         state=state,
         connected=connected,
-        playbook_engine=playbook_engine,
         knowledge_service=knowledge_service,
         llm_registry=llm_registry,
-        tool_executor=tool_executor,
+        get_llm_client=get_llm_client,
+        top_k=top_k,
         memory_manager=memory_manager,
         workflow_store=workflow_store,
         event_bus=event_bus,
@@ -238,10 +190,10 @@ def _build_graph_state(
     envelope: RuntimeEnvelope,
     state: RuntimeState,
     connected: bool,
-    playbook_engine: PlaybookEngine,
     knowledge_service: KnowledgeService,
     llm_registry: LLMRegistry,
-    tool_executor: ToolExecutor,
+    get_llm_client: Any | None,
+    top_k: int,
     memory_manager: MemoryManager,
     workflow_store: WorkflowStore,
     event_bus: WorkflowEventBus,
@@ -254,17 +206,13 @@ def _build_graph_state(
         "runtime_state": state,
         "diagnosis": envelope.diagnosis,
         "connected": connected,
-        "playbook_engine": playbook_engine,
         "knowledge_service": knowledge_service,
-        "get_llm_client": llm_registry.get_active_client,
-        "tool_executor": tool_executor,
+        "get_llm_client": get_llm_client or llm_registry.get_active_client,
+        "top_k": max(1, int(top_k or 4)),
         "memory_manager": memory_manager,
         "workflow_store": workflow_store,
         "event_bus": event_bus,
         "short_memory": short_memory,
-        "build_classify_prompt": build_classify_prompt,
-        "build_route_prompt": build_route_prompt,
-        "build_planner_prompt": build_planner_prompt,
         "build_summary_prompt": build_summary_prompt,
         "interaction_mode": state.interaction_mode_snapshot,
         "conversation_history": _build_recent_conversation_history(
@@ -275,8 +223,6 @@ def _build_graph_state(
     }
     if "intent" in short_memory.scratchpad:
         graph_state["intent"] = short_memory.scratchpad["intent"]
-    if "playbook" in short_memory.scratchpad:
-        graph_state["playbook"] = short_memory.scratchpad["playbook"]
     if "knowledge" in short_memory.scratchpad:
         graph_state["knowledge"] = short_memory.scratchpad["knowledge"]
     if "analysis" in short_memory.scratchpad:
@@ -297,39 +243,26 @@ def _build_recent_conversation_history(
     history = [
         {
             "role": str(turn.role or "").strip(),
-            "content": str(turn.content or "").strip(),
+            "content": _history_content_for_model(str(turn.content or "")),
         }
         for turn in list(chat_history or [])
-        if str(turn.content or "").strip()
+        if _history_content_for_model(str(turn.content or ""))
     ]
     if history and history[-1]["role"] == "user" and history[-1]["content"] == current:
         history = history[:-1]
     return history[-limit:]
 
 
+def _history_content_for_model(content: str) -> str:
+    normalized = str(content or "").strip()
+    return ATTACHMENT_SUMMARY_PATTERN.sub(" ", normalized).strip()
+
+
 def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
     runtime_state = state["runtime_state"]
     start_node = _resolve_start_node(runtime_state, state["request"].resume)
 
-    if _should_run("classify_query", start_node):
-        state.update(_run_node("classify_query", classify_query_node, state))
-        if _is_terminal(state):
-            return state
-    if _should_run("match_playbook", start_node):
-        state.update(_run_node("match_playbook", match_playbook_node, state))
-        if _is_terminal(state):
-            return state
-
-    next_node = route_after_match(state)
-    if next_node == "playbook_execution" and _should_run("playbook_execution", start_node):
-        state.update(_run_node("playbook_execution", enter_playbook_node, state))
-        if route_after_playbook_execution(state) == "summarize" and _should_run("summarize_response", start_node):
-            state.update(_run_node("summarize_response", summarize_response_node, state))
-            return state
-    if next_node == "summarize_response" and _should_run("summarize_response", start_node):
-        state.update(_run_node("summarize_response", summarize_response_node, state))
-        return state
-    if next_node == "knowledge_selection" and _should_run("load_knowledge_source_docs", start_node):
+    if _should_run("load_knowledge_source_docs", start_node):
         state.update(_run_node("load_knowledge_source_docs", load_knowledge_source_docs_node, state))
         if _is_terminal(state):
             return state
@@ -380,23 +313,6 @@ def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:
             if _should_run("summarize_response", start_node):
                 state.update(_run_node("summarize_response", summarize_response_node, state))
             return state
-        if next_node == "call_tools":
-            if _should_run("call_tools", start_node):
-                state.update(_run_node("call_tools", call_tools_node, state))
-                if _is_terminal(state):
-                    return state
-            tool_next = route_after_call_tools(state)
-            if tool_next == "await_confirmation":
-                if _should_run("await_confirmation", start_node):
-                    state.update(_run_node("await_confirmation", await_confirmation_node, state))
-                if _should_run("summarize_response", start_node):
-                    state.update(_run_node("summarize_response", summarize_response_node, state))
-                return state
-            if tool_next == "summarize":
-                if _should_run("summarize_response", start_node):
-                    state.update(_run_node("summarize_response", summarize_response_node, state))
-                return state
-            continue
         if next_node != "retry":
             return state
     return state
@@ -411,13 +327,13 @@ def _should_run(node_name: str, start_node: str) -> bool:
 
 def _resolve_start_node(runtime_state: RuntimeState, is_resume: bool) -> str:
     if not is_resume:
-        return "classify_query"
+        return "load_knowledge_source_docs"
     resume_from = (runtime_state.resume_from_step or "").strip()
     if resume_from in NODE_SEQUENCE:
         return resume_from
     if resume_from in STEP_TO_NODE:
         return STEP_TO_NODE[resume_from]
-    return "classify_query"
+    return "load_knowledge_source_docs"
 
 
 def _is_terminal(state: ChatGraphState) -> bool:
@@ -451,7 +367,6 @@ def _run_node(node_name: str, node_fn: Any, state: ChatGraphState) -> dict[str, 
 
     short_memory.current_node = node_name
     short_memory.visited_nodes.append(node_name)
-    runtime_state.playbook_execution.current_node_id = node_name
     publish_workflow_event(
         store=workflow_store,
         event_bus=event_bus,
@@ -475,11 +390,6 @@ def _run_node(node_name: str, node_fn: Any, state: ChatGraphState) -> dict[str, 
             "node": node_name,
             "current_step": updated_runtime.current_step,
             "finished": updated_runtime.finished,
-            "playbook_state": {
-                "playbook_id": updated_runtime.playbook_execution.playbook_id,
-                "current_node": updated_runtime.playbook_execution.current_node_id,
-                "status": updated_runtime.playbook_execution.status,
-            },
         },
     )
     return result

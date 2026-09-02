@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.playbook.models import PlaybookExecutionState
 from backend.session.models import InteractionMode, SessionState, TaskState
-from backend.ssh.models import RobotConnectionConfig
 from backend.tools.models import ToolCall, ToolResult
 
 
@@ -57,7 +55,6 @@ class RuntimeState:
     finished: bool = False
     trace: list[RouteDecision] = field(default_factory=list)
     tool_results: list[ToolResult] = field(default_factory=list)
-    playbook_execution: PlaybookExecutionState = field(default_factory=PlaybookExecutionState)
 
 
 @dataclass
@@ -65,4 +62,3 @@ class RuntimeEnvelope:
     session: SessionState
     task: TaskState
     diagnosis: DiagnosisSummary
-    robot_config: RobotConnectionConfig

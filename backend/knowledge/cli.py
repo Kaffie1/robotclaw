@@ -10,6 +10,7 @@ from .services import (
     list_knowledge_files,
     preview_split_file,
     rebuild_vectorstore_from_knowledge_dir,
+    upsert_file,
 )
 
 
@@ -31,6 +32,16 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("file_path", help="本地文件路径")
     ingest_parser.add_argument("--source-name", default="", help="入库后的文件名")
     ingest_parser.add_argument(
+        "--replace-existing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="同名文件是否覆盖，默认覆盖",
+    )
+
+    upsert_parser = subparsers.add_parser("upsert", help="新增或更新单个文件到知识库，只替换该文件的向量记录")
+    upsert_parser.add_argument("file_path", help="本地文件路径")
+    upsert_parser.add_argument("--source-name", default="", help="入库后的相对文件名")
+    upsert_parser.add_argument(
         "--replace-existing",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -63,6 +74,15 @@ def main() -> None:
 
     if args.command == "ingest":
         result = ingest_file(
+            args.file_path,
+            source_name=str(args.source_name or "").strip() or None,
+            replace_existing=bool(args.replace_existing),
+        )
+        _print_json(result)
+        return
+
+    if args.command == "upsert":
+        result = upsert_file(
             args.file_path,
             source_name=str(args.source_name or "").strip() or None,
             replace_existing=bool(args.replace_existing),

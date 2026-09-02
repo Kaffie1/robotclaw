@@ -4,11 +4,13 @@ import asyncio
 import json
 import mimetypes
 import re
+import time
 import uuid
 from urllib import error, request
 from typing import Any, Protocol
 
 from backend.llm.config import LLMConfig, load_llm_config
+from backend.llm.metrics import LLMCallMetric, record_llm_call
 from backend.llm.models import AudioTranscriptionResponse, LLMMessage, LLMRequest, LLMResponse, StructuredLLMResponse
 from backend.llm.parser import extract_json_object, to_payload
 from backend.llm.volc_asr import load_volc_asr_config, transcribe_audio_bytes
@@ -93,6 +95,7 @@ class LLMClient:
             llm_request.metadata,
             _summarize_messages(llm_request.messages),
         )
+        started_at = time.perf_counter()
         try:
             response = self.backend.invoke(llm_request)
         except Exception:
@@ -104,13 +107,32 @@ class LLMClient:
                 llm_request.metadata,
             )
             raise
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        usage = _extract_usage(response.raw)
+        response.raw["duration_ms"] = duration_ms
         logger.info(
-            "LLM invoke output provider=%s profile_id=%s model=%s finish_reason=%s content=%s",
+            "LLM invoke output provider=%s profile_id=%s model=%s finish_reason=%s duration_ms=%s input_tokens=%s output_tokens=%s total_tokens=%s content=%s",
             self.config.provider,
             self.config.profile_id,
             response.model,
             response.finish_reason,
+            duration_ms,
+            usage.get("input_tokens"),
+            usage.get("output_tokens"),
+            usage.get("total_tokens"),
             _clip_text(response.content),
+        )
+        record_llm_call(
+            LLMCallMetric(
+                provider=self.config.provider,
+                profile_id=self.config.profile_id,
+                model=response.model,
+                node=str(llm_request.metadata.get("node", "") or ""),
+                duration_ms=duration_ms,
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                total_tokens=usage.get("total_tokens"),
+            )
         )
         return response
 
@@ -349,6 +371,50 @@ def _build_raw_payload(response: Any) -> dict[str, Any]:
         "usage_metadata": usage_metadata,
         "id": getattr(response, "id", ""),
     }
+
+
+def _extract_usage(raw: dict[str, Any]) -> dict[str, int | None]:
+    usage_metadata = _as_dict(raw.get("usage_metadata"))
+    response_metadata = _as_dict(raw.get("response_metadata"))
+    token_usage = _as_dict(response_metadata.get("token_usage") or response_metadata.get("usage") or raw.get("usage"))
+    source = usage_metadata if usage_metadata else token_usage
+
+    input_tokens = _first_int(
+        source,
+        "input_tokens",
+        "prompt_tokens",
+        "prompt_token_count",
+    )
+    output_tokens = _first_int(
+        source,
+        "output_tokens",
+        "completion_tokens",
+        "completion_token_count",
+    )
+    total_tokens = _first_int(source, "total_tokens", "total_token_count")
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = int(input_tokens or 0) + int(output_tokens or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _first_int(payload: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _build_extra_body() -> dict[str, Any]:

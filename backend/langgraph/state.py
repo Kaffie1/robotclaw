@@ -6,12 +6,10 @@ from backend.gateway.models import ChatRequest
 from backend.knowledge import KnowledgeService
 from backend.memory import MemoryManager
 from backend.memory.models import ShortMemory
-from backend.playbook import PlaybookEngine
 from backend.runtime.models import DiagnosisSummary, RuntimeEnvelope, RuntimeState
 from backend.runtime.workflow.models import ConfirmationRequest
 from backend.runtime.workflow.store import WorkflowStore
 from backend.runtime.workflow.events import WorkflowEventBus
-from backend.tools import ToolExecutor
 from backend.llm.models import LLMMessage
 
 
@@ -21,10 +19,9 @@ class ChatGraphState(TypedDict, total=False):
     runtime_state: RuntimeState
     diagnosis: DiagnosisSummary
     connected: bool
-    playbook_engine: PlaybookEngine
     knowledge_service: KnowledgeService
     get_llm_client: Any
-    tool_executor: ToolExecutor
+    top_k: int
     memory_manager: MemoryManager
     workflow_store: WorkflowStore
     event_bus: WorkflowEventBus

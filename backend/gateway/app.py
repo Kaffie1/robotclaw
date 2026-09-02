@@ -4,7 +4,8 @@ import base64
 import binascii
 from pathlib import Path
 
-from backend.llm import AudioTranscriptionResponse
+from backend.llm import AudioTranscriptionResponse, LLMClient
+from backend.llm.config import llm_config_from_settings
 from backend.llm.volc_asr import load_volc_asr_config
 from backend.gateway.models import ChatRequest
 from backend.runtime.models import DiagnosisSummary, RuntimeEnvelope
@@ -12,12 +13,15 @@ from backend.memory import MemoryManager
 from backend.runtime import RuntimeService
 from backend.session import SessionManager
 from backend.shared import get_logger, load_env_file
-from backend.shared.config import DEFAULT_INTERACTION_MODE, SPEECH_AUTO_SEND
-from backend.ssh import RobotConnectionConfig, SSHManager
-from backend.tools import ToolExecutor
+from backend.shared.config import SPEECH_AUTO_SEND
 
 
 logger = get_logger("gateway.app")
+
+DEFAULT_OPENAI_BASE_URL = ""
+DEFAULT_OPENAI_CHAT_MODEL = "gpt-4.1-mini"
+DEFAULT_LLM_TEMPERATURE = "0"
+DEFAULT_TOP_K = "4"
 
 
 class GatewayApplication:
@@ -26,53 +30,28 @@ class GatewayApplication:
         load_env_file(root / ".env")
         self.memory_manager = MemoryManager()
         self.session_manager = SessionManager(memory_manager=self.memory_manager)
-        self.ssh_manager = SSHManager()
-        self.runtime = RuntimeService(
-            memory_manager=self.memory_manager,
-            tool_executor=ToolExecutor(ssh_manager=self.ssh_manager),
-        )
+        self.runtime = RuntimeService(memory_manager=self.memory_manager)
 
     def bootstrap(self) -> dict:
         logger.info("Bootstrap requested")
         payload = self.session_manager.bootstrap_payload()
-        payload["connection"] = self.ssh_manager.ui_payload()
         payload["llm"] = self.runtime.llm_status()
         payload["speech"] = self.speech_status()
-        payload["default_interaction_mode"] = DEFAULT_INTERACTION_MODE
-        payload["interaction_modes"] = [
-            {
-                "id": "playbook",
-                "label": "Playbook",
-                "description": "只匹配并执行标准 playbook，不走知识问答与工具自由决策。",
-            },
-            {
-                "id": "qa",
-                "label": "Knowledge",
-                "description": "先匹配 playbook，再转为解释型回答；未命中则走知识检索，不执行工具。",
-            },
-            {
-                "id": "agent",
-                "label": "Agent",
-                "description": "先匹配 playbook；未命中时先检索知识，再由模型判断是否需要执行工具。",
-            },
-        ]
         return payload
 
     def create_session(self, user_id: str, interaction_mode: str = "") -> dict:
-        logger.info("Creating session for user_id=%s interaction_mode=%s", user_id, interaction_mode)
-        return self.session_manager.create_session_payload(user_id=user_id, interaction_mode=interaction_mode or None)
+        del interaction_mode
+        logger.info("Creating QA session for user_id=%s", user_id)
+        return self.session_manager.create_session_payload(user_id=user_id, interaction_mode="qa")
 
-    def set_session_mode(self, session_id: str, interaction_mode: str) -> dict:
-        logger.info("Updating session mode session_id=%s interaction_mode=%s", session_id, interaction_mode)
-        session = self.session_manager.update_interaction_mode(session_id, interaction_mode)
-        return {
-            "session": self.session_manager.session_payload(session.session_id),
-            "active_session_id": session.session_id,
-            "effective_from": "next_request",
-            "running_task_affected": False,
-        }
-
-    def send_chat(self, session_id: str, user_id: str, content: str, images: list[dict] | None = None) -> dict:
+    def send_chat(
+        self,
+        session_id: str,
+        user_id: str,
+        content: str,
+        images: list[dict] | None = None,
+        llm_settings: dict | None = None,
+    ) -> dict:
         logger.info("Received chat request session_id=%s user_id=%s", session_id, user_id)
         request = self.runtime.build_request(
             session_id=session_id,
@@ -80,6 +59,7 @@ class GatewayApplication:
             content=content,
             images=self._normalize_image_attachments(images or []),
         )
+        request.llm_settings = self._normalize_settings_payload(llm_settings or {})
         return self._run_chat(session_id=session_id, request=request)
 
     def send_voice_chat(
@@ -91,16 +71,19 @@ class GatewayApplication:
         mime_type: str = "",
         filename: str = "",
         language: str = "",
+        llm_settings: dict | None = None,
     ) -> dict:
         transcription = self.transcribe_audio(
             audio_base64=audio_base64,
             mime_type=mime_type,
             filename=filename,
             language=language,
+            llm_settings=llm_settings,
         )
         content = transcription.text.strip()
         logger.info("Received voice chat request session_id=%s user_id=%s", session_id, user_id)
         request = self.runtime.build_request(session_id=session_id, user_id=user_id, content=content)
+        request.llm_settings = self._normalize_settings_payload(llm_settings or {})
         payload = self._run_chat(session_id=session_id, request=request)
         payload["transcript"] = {
             "text": transcription.text,
@@ -125,7 +108,6 @@ class GatewayApplication:
 
     def cancel_chat(self, session_id: str, task_id: str) -> dict:
         logger.info("Cancelling chat session_id=%s task_id=%s", session_id, task_id)
-        session = self.session_manager.get_session_state(session_id)
         token = self.runtime.interrupt_task(session_id=session_id, task_id=task_id)
         self.session_manager.set_task_status(task_id, "interrupted", current_node="interrupted")
         return {
@@ -134,7 +116,6 @@ class GatewayApplication:
             "status": "interrupted",
             "resume_token": token,
             "runtime": self.runtime.get_runtime_payload(task_id),
-            "active_robot_ref": session.current_robot_ref,
         }
 
     def chat_history(self, session_id: str) -> dict:
@@ -143,6 +124,34 @@ class GatewayApplication:
 
     def llm_status(self) -> dict:
         return self.runtime.llm_status()
+
+    def settings_payload(self) -> dict:
+        active_config = self.runtime.llm_registry.get_active_config()
+        return {
+            "settings": {
+                "ROBOTCLAW_LLM_TEMPERATURE": "",
+                "TOP_K": "",
+                "OPENAI_API_KEY": "",
+                "OPENAI_BASE_URL": "",
+                "OPENAI_CHAT_MODEL": "",
+            },
+            "defaults": {
+                "ROBOTCLAW_LLM_TEMPERATURE": str(active_config.temperature),
+                "TOP_K": DEFAULT_TOP_K,
+                "OPENAI_BASE_URL": active_config.api_base or DEFAULT_OPENAI_BASE_URL,
+                "OPENAI_CHAT_MODEL": active_config.model or DEFAULT_OPENAI_CHAT_MODEL,
+            },
+            "required": ["OPENAI_API_KEY"],
+        }
+
+    def save_settings(self, payload: dict) -> dict:
+        settings = self._normalize_settings_payload(payload)
+        if not settings["OPENAI_API_KEY"]:
+            raise ValueError("OPENAI_API_KEY 不能为空")
+        return {
+            **self.settings_payload(),
+            "settings": settings,
+        }
 
     def speech_status(self) -> dict:
         config = self.runtime.llm_registry.get_active_config()
@@ -181,11 +190,12 @@ class GatewayApplication:
         mime_type: str = "",
         filename: str = "",
         language: str = "",
+        llm_settings: dict | None = None,
     ) -> AudioTranscriptionResponse:
         audio_bytes = self._decode_audio_base64(audio_base64)
         effective_mime_type = mime_type.strip() or "audio/webm"
         effective_filename = filename.strip() or self._default_audio_filename(effective_mime_type)
-        llm_client = self.runtime.llm_registry.get_active_client()
+        llm_client = self._build_request_llm_client(self._normalize_settings_payload(llm_settings or {}))
         try:
             return llm_client.transcribe_audio(
                 audio_bytes=audio_bytes,
@@ -211,7 +221,6 @@ class GatewayApplication:
         display_content = self._display_request_content(request)
         task = self.session_manager.ensure_active_task(session_id, title=display_content)
         session = self.session_manager.get_session_state(session_id)
-        session.current_robot_ref = self.ssh_manager.current_config().robot_ref
         self.session_manager.set_task_status(task.task_id, "running", current_node="runtime")
         self.session_manager.record_turn(session_id, "user", display_content)
 
@@ -219,16 +228,15 @@ class GatewayApplication:
             session=session,
             task=task,
             diagnosis=DiagnosisSummary(),
-            robot_config=self.ssh_manager.current_config(),
         )
         try:
             _state, _diagnosis, response = self.runtime.run(
                 envelope=envelope,
                 request=request,
-                connected=self.ssh_manager.current_state().connected,
+                connected=False,
             )
         except Exception as exc:
-            raise ValueError(self._user_facing_runtime_error(exc)) from exc
+            raise ValueError(self._user_facing_runtime_error(exc, has_images=bool(request.images))) from exc
         logger.info(
             "Chat finished session_id=%s task_id=%s status=%s current_step=%s",
             session_id,
@@ -236,7 +244,12 @@ class GatewayApplication:
             response.status,
             _state.current_step,
         )
-        self.session_manager.record_turn(session_id, "assistant", response.summary)
+        self.session_manager.record_turn(
+            session_id,
+            "assistant",
+            response.summary,
+            metadata={"metrics": response.data.get("metrics", {})},
+        )
         self.session_manager.update_session_from_chat(session_id, display_content)
         self.session_manager.set_task_status(task.task_id, response.status, current_node=_state.current_step)
         return {
@@ -253,61 +266,37 @@ class GatewayApplication:
             },
         }
 
+    def _normalize_settings_payload(self, payload: dict) -> dict[str, str]:
+        temperature = str(payload.get("ROBOTCLAW_LLM_TEMPERATURE", "")).strip()
+        top_k = str(payload.get("TOP_K", "")).strip()
+        api_key = str(payload.get("OPENAI_API_KEY", "")).strip()
+        api_base = str(payload.get("OPENAI_BASE_URL", "")).strip()
+        chat_model = str(payload.get("OPENAI_CHAT_MODEL", "")).strip()
+
+        if temperature:
+            float(temperature)
+        if top_k:
+            parsed_top_k = int(top_k)
+            if parsed_top_k <= 0:
+                raise ValueError("TOP_K 必须大于 0")
+        return {
+            "ROBOTCLAW_LLM_TEMPERATURE": temperature,
+            "TOP_K": top_k,
+            "OPENAI_API_KEY": api_key,
+            "OPENAI_BASE_URL": api_base,
+            "OPENAI_CHAT_MODEL": chat_model,
+        }
+
+    def _build_request_llm_client(self, llm_settings: dict) -> LLMClient:
+        base_config = self.runtime.llm_registry.get_active_config()
+        return LLMClient(config=llm_config_from_settings(llm_settings, base=base_config))
+
     def _display_request_content(self, request: ChatRequest) -> str:
         content = str(request.content or "").strip()
         if not request.images:
             return content
         image_label = f"[{len(request.images)} 张图片]"
         return f"{content} {image_label}".strip() if content else f"图片 {image_label}"
-
-    def connect_robot(
-        self,
-        name: str,
-        host: str,
-        *,
-        port: int | str = 22,
-        username: str = "",
-        password: str = "",
-        private_key_path: str = "",
-        ros_version: str = "",
-        workspace: str = "",
-        setup_script: str = "",
-    ) -> dict:
-        logger.info("Connecting robot name=%s host=%s port=%s username=%s", name, host, port, username)
-        config, state = self.ssh_manager.connect(
-            config=RobotConnectionConfig(
-                robot_ref=name.strip() or "naviai",
-                host=host.strip() or "172.16.9.136",
-                port=self._normalize_port(port),
-                username=username.strip() or "naviai",
-                password=password or "naviai@2024",
-                private_key_path=private_key_path.strip(),
-                ros_version=ros_version.strip(),
-                workspace=workspace.strip(),
-                setup_script=setup_script.strip(),
-            )
-        )
-        if not state.connected:
-            error_message = str(state.last_error or "SSH 连接失败").strip() or "SSH 连接失败"
-            raise ValueError(f"连接机器人失败：{error_message}")
-
-        sessions = self.session_manager.list_sessions()
-        if sessions:
-            session = self.session_manager.get_session_state(sessions[0]["id"])
-            session.current_robot_ref = config.robot_ref
-        return self.ssh_manager.ui_payload()
-
-    def disconnect_robot(self) -> dict:
-        logger.info("Disconnecting robot")
-        self.ssh_manager.disconnect()
-        return self.ssh_manager.ui_payload()
-
-    def _normalize_port(self, value: int | str) -> int:
-        try:
-            port = int(str(value or 22).strip() or "22")
-        except (TypeError, ValueError):
-            port = 22
-        return port if port > 0 else 22
 
     def _decode_audio_base64(self, value: str) -> bytes:
         encoded = str(value or "").strip()
@@ -368,13 +357,17 @@ class GatewayApplication:
             return "audio.ogg"
         return "audio.webm"
 
-    def _user_facing_runtime_error(self, exc: Exception) -> str:
+    def _user_facing_runtime_error(self, exc: Exception, *, has_images: bool = False) -> str:
         message = str(exc).strip()
         normalized = message.lower()
         if "account_expired" in normalized or "account expired" in normalized:
             return "当前聊天模型账号已过期，请更换可用的 OPENAI_API_KEY 或充值后重试"
         if "permissiondenied" in normalized or "permission denied" in normalized or "403" in normalized:
             return "当前聊天模型认证失败或无权限，请检查 OPENAI_API_KEY、OPENAI_BASE_URL 和模型配置"
+        if "unsupported capability" in normalized:
+            if has_images:
+                return "当前聊天模型或接口不支持图片理解能力，请切换到支持图片的模型，或删除图片后重试"
+            return "当前聊天模型或接口拒绝了本次请求能力，请检查模型名称、OPENAI_BASE_URL 是否匹配，或更换兼容模型后重试"
         if "rate_limit" in normalized or "429" in normalized or "用量上限" in message:
             return "当前聊天模型额度已用尽，请更换可用模型或充值后重试"
         if message:

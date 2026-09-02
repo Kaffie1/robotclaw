@@ -144,6 +144,29 @@ def llm_config_from_payload(payload: dict) -> LLMConfig:
     )
 
 
+def llm_config_from_settings(payload: dict, base: LLMConfig | None = None) -> LLMConfig:
+    base_config = base or load_llm_config()
+    api_key = str(payload.get("OPENAI_API_KEY") or "").strip() or base_config.api_key or OPENAI_API_KEY
+    api_base = str(payload.get("OPENAI_BASE_URL") or "").strip() or base_config.api_base or OPENAI_BASE_URL
+    model = str(payload.get("OPENAI_CHAT_MODEL") or "").strip() or base_config.model or OPENAI_CHAT_MODEL
+    temperature = str(payload.get("ROBOTCLAW_LLM_TEMPERATURE") or "").strip()
+    return LLMConfig(
+        profile_id="request",
+        label="Request",
+        provider="openai",
+        model=model,
+        asr_provider=base_config.asr_provider,
+        asr_model=base_config.asr_model,
+        asr_language=base_config.asr_language,
+        temperature=float(temperature) if temperature else base_config.temperature,
+        max_tokens=base_config.max_tokens,
+        timeout_seconds=base_config.timeout_seconds,
+        asr_timeout_seconds=base_config.asr_timeout_seconds,
+        api_base=api_base,
+        api_key=api_key,
+    )
+
+
 def _default_asr_provider() -> str:
     explicit = LLM_ASR_PROVIDER
     if explicit:

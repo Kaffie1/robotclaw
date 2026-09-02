@@ -21,19 +21,17 @@ def _lexical_score(doc: Document, query: str) -> float:
     if not terms:
         return 0.0
 
-    haystack = normalize_text(
-        " ".join(
-            [
-                str(doc.page_content or ""),
-                str(doc.metadata.get("title", "") or ""),
-                str(doc.metadata.get("filename", "") or ""),
-            ]
-        )
-    )
+    content = normalize_text(str(doc.page_content or ""))
+    title = normalize_text(str(doc.metadata.get("title", "") or ""))
+    filename = normalize_text(str(doc.metadata.get("filename", "") or ""))
     score = 0.0
     for term in terms:
-        if term in haystack:
-            score += 1.0 + (haystack.count(term) * 0.1)
+        if term in filename:
+            score += 5.0 + (filename.count(term) * 0.5)
+        if term in title:
+            score += 3.0 + (title.count(term) * 0.3)
+        if term in content:
+            score += 1.0 + (content.count(term) * 0.1)
     return score
 
 

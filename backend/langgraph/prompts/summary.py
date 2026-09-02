@@ -49,6 +49,7 @@ def build_summary_request_prompt(
 ) -> str:
     trace_text = "\n".join(f"- {item.stage}: {item.summary}" for item in trace)
     solution_text = "\n".join(f"- {item.detail}" for item in solutions)
+    limited_knowledge_context = knowledge_context[:1200]
     return (
         f"{prompt}\n"
         "请返回 JSON，字段包含 summary、evidence、next_steps。\n"
@@ -70,7 +71,7 @@ def build_summary_request_prompt(
         f"内部轨迹（不要直接展示给用户）：\n{trace_text}\n"
         f"内部分析结论：{analysis.get('summary', '')}\n"
         f"内部建议：\n{solution_text}\n"
-        f"知识上下文：\n{knowledge_context}\n"
+        f"知识上下文：\n{limited_knowledge_context}\n"
         f"引用信息：\n{citations_text}"
     )
 

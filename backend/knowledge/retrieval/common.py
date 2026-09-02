@@ -12,6 +12,27 @@ from ..ingestion.loader import SUPPORTED_FILE_SUFFIXES, load_documents
 from ..ingestion.splitter import split_documents
 
 
+MODULE_SYNONYMS = {
+    "底盘": ["chassis"],
+    "chassis": ["底盘"],
+    "定位": ["location", "reloc"],
+    "location": ["定位"],
+    "reloc": ["定位", "重定位"],
+    "重定位": ["reloc", "location"],
+    "建图": ["mapping"],
+    "mapping": ["建图"],
+    "感知": ["perception"],
+    "perception": ["感知"],
+    "地图": ["map_server", "map"],
+    "map_server": ["地图"],
+    "导航": ["navigation", "nav"],
+    "navigation": ["导航"],
+    "nav": ["导航"],
+    "监控": ["monitor"],
+    "monitor": ["监控"],
+}
+
+
 def build_chunk_key(doc: Document) -> str:
     metadata = dict(getattr(doc, "metadata", {}) or {})
     return "::".join(
@@ -38,10 +59,22 @@ def extract_terms(text: str) -> list[str]:
         seen.add(normalized)
         terms.append(normalized)
 
+    def _append_with_synonyms(token: str) -> None:
+        normalized = token.strip().lower()
+        if not normalized:
+            return
+        _append(normalized)
+        for synonym in MODULE_SYNONYMS.get(normalized, []):
+            _append(synonym)
+
     _append(raw)
     for token in re.split(r"[\s,.;:!?()\\[\\]{}<>\"'`|/\\\\，。；：！？（）【】《》]+", raw):
         if token:
-            _append(token)
+            _append_with_synonyms(token)
+            for chunk in re.findall(r"[\u4e00-\u9fff]+", token):
+                for size in range(2, min(6, len(chunk)) + 1):
+                    for index in range(0, len(chunk) - size + 1):
+                        _append_with_synonyms(chunk[index : index + size])
     return terms
 
 

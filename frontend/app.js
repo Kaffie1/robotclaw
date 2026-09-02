@@ -1,21 +1,18 @@
 const state = {
   sessions: [],
   activeSessionId: "",
-  interactionModes: [],
-  defaultInteractionMode: "qa",
   chatBusy: false,
-  connection: {
-    connected: false,
-    name: "",
-    host: "",
-    port: 22,
-  },
   speech: {
     asr_enabled: false,
     auto_send: true,
   },
+  settings: {},
+  settingsDefaults: {},
   pendingImages: [],
 };
+
+const SETTINGS_STORAGE_KEY = "robotclaw.llm_settings";
+const ATTACHMENT_SUMMARY_PATTERN = /\s*\[\d+\s*张图片\]\s*/g;
 
 let pendingMessageId = 0;
 let mediaRecorder = null;
@@ -32,25 +29,27 @@ const refs = {
   newSessionButton: document.getElementById("newSessionButton"),
   sessionTemplate: document.getElementById("sessionTemplate"),
   messageTemplate: document.getElementById("messageTemplate"),
-  connectionPanel: document.querySelector(".connection-panel"),
-  connectionCard: document.getElementById("connectionCard"),
-  connectionStatus: document.getElementById("connectionStatus"),
-  robotName: document.getElementById("robotName"),
-  robotHost: document.getElementById("robotHost"),
-  connectPassword: document.getElementById("connectPassword"),
-  passwordToggle: document.getElementById("passwordToggle"),
-  connectionForm: document.getElementById("connectionForm"),
-  disconnectButton: document.getElementById("disconnectButton"),
   voiceButton: document.getElementById("voiceButton"),
   composerStatus: document.getElementById("composerStatus"),
-  interactionModeSelect: document.getElementById("interactionModeSelect"),
-  interactionModeHint: document.getElementById("interactionModeHint"),
   attachImageButton: document.getElementById("attachImageButton"),
   imageInput: document.getElementById("imageInput"),
   imagePreview: document.getElementById("imagePreview"),
   imageLightbox: document.getElementById("imageLightbox"),
   imageLightboxImg: document.getElementById("imageLightboxImg"),
   imageLightboxClose: document.getElementById("imageLightboxClose"),
+  settingsButton: document.getElementById("settingsButton"),
+  settingsModal: document.getElementById("settingsModal"),
+  settingsForm: document.getElementById("settingsForm"),
+  settingsCloseButton: document.getElementById("settingsCloseButton"),
+  settingsCancelButton: document.getElementById("settingsCancelButton"),
+  settingsSaveButton: document.getElementById("settingsSaveButton"),
+  settingsStatus: document.getElementById("settingsStatus"),
+  openaiApiKeyInput: document.getElementById("openaiApiKeyInput"),
+  apiKeyToggleButton: document.getElementById("apiKeyToggleButton"),
+  openaiBaseUrlInput: document.getElementById("openaiBaseUrlInput"),
+  openaiChatModelInput: document.getElementById("openaiChatModelInput"),
+  llmTemperatureInput: document.getElementById("llmTemperatureInput"),
+  topKInput: document.getElementById("topKInput"),
 };
 
 async function request(path, options = {}) {
@@ -67,6 +66,34 @@ async function request(path, options = {}) {
     throw new Error(data.error || "请求失败");
   }
   return data;
+}
+
+function loadLocalSettings() {
+  try {
+    const raw = window.sessionStorage.getItem(SETTINGS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return normalizeSettings(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function saveLocalSettings(settings) {
+  window.sessionStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(normalizeSettings(settings)));
+}
+
+function normalizeSettings(settings) {
+  return {
+    OPENAI_API_KEY: String(settings?.OPENAI_API_KEY || "").trim(),
+    OPENAI_BASE_URL: String(settings?.OPENAI_BASE_URL || "").trim(),
+    OPENAI_CHAT_MODEL: String(settings?.OPENAI_CHAT_MODEL || "").trim(),
+    ROBOTCLAW_LLM_TEMPERATURE: String(settings?.ROBOTCLAW_LLM_TEMPERATURE || "").trim(),
+    TOP_K: String(settings?.TOP_K || "").trim(),
+  };
+}
+
+function currentRequestSettings() {
+  return normalizeSettings(state.settings);
 }
 
 function activeSession() {
@@ -86,7 +113,7 @@ function renderSessions() {
     const fragment = refs.sessionTemplate.content.cloneNode(true);
     const button = fragment.querySelector(".session-item");
     fragment.querySelector(".session-title").textContent = session.title;
-    fragment.querySelector(".session-preview").textContent = session.preview || "暂无消息";
+    fragment.querySelector(".session-preview").textContent = displayMessageContent(session.preview) || "暂无消息";
     if (session.id === state.activeSessionId) {
       button.classList.add("active");
     }
@@ -117,7 +144,7 @@ function renderMessages() {
       container.classList.add("pending");
     }
     renderMessageBubble(bubble, message);
-    time.textContent = message.created_at || "";
+    time.textContent = formatMessageFooter(message);
     refs.chatScroll.appendChild(fragment);
   }
 
@@ -126,7 +153,7 @@ function renderMessages() {
 
 function renderMessageBubble(bubble, message) {
   bubble.textContent = "";
-  const text = String(message.content || "").trim();
+  const text = displayMessageContent(message.content);
   if (text) {
     const textNode = document.createElement("div");
     textNode.className = "message-text";
@@ -155,45 +182,45 @@ function renderMessageBubble(bubble, message) {
   }
 }
 
-function renderConnection() {
-  const { connected, name, host } = state.connection;
-  refs.connectionPanel.classList.toggle("is-connected", connected);
-  refs.connectionCard.classList.toggle("connected", connected);
-  refs.connectionStatus.classList.toggle("connected", connected);
-  refs.connectionStatus.querySelector(".status-text").textContent = connected ? "已连接" : "未连接";
-  refs.robotName.textContent = name || "未选择机器人";
-  refs.robotHost.textContent = host || "-";
+function displayMessageContent(content) {
+  return String(content || "").replace(ATTACHMENT_SUMMARY_PATTERN, " ").trim();
 }
 
-function renderInteractionMode() {
-  const session = activeSession();
-  const select = refs.interactionModeSelect;
-  const hint = refs.interactionModeHint;
-  const modes = state.interactionModes || [];
-  const currentMode = session?.interaction_mode || state.defaultInteractionMode || "qa";
-
-  select.innerHTML = "";
-  for (const mode of modes) {
-    const option = document.createElement("option");
-    option.value = mode.id;
-    option.textContent = mode.label;
-    option.selected = mode.id === currentMode;
-    select.appendChild(option);
+function formatMessageFooter(message) {
+  const parts = [];
+  if (message.created_at) {
+    parts.push(message.created_at);
   }
+  const metrics = message.metadata?.metrics;
+  if (message.role === "assistant" && metrics) {
+    const totalTokens = Number(metrics.total_tokens);
+    const elapsedSeconds = Number(metrics.elapsed_seconds);
+    if (Number.isFinite(totalTokens) && totalTokens > 0) {
+      parts.push(`${totalTokens} tokens`);
+    }
+    if (Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0) {
+      parts.push(`${formatDuration(elapsedSeconds)}`);
+    }
+  }
+  return parts.join(" · ");
+}
 
-  const activeMode = modes.find((item) => item.id === currentMode);
-  hint.textContent = activeMode?.description || "选择当前会话的交互模式。";
-  select.disabled = modes.length <= 0 || state.chatBusy;
+function formatDuration(seconds) {
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remaining = Math.round(seconds % 60);
+  return `${minutes}m ${remaining}s`;
 }
 
 function renderComposerState() {
-  const supported = Boolean(navigator.mediaDevices?.getUserMedia) && typeof window.MediaRecorder !== "undefined";
   const hasText = Boolean(refs.messageInput.value.trim());
   const hasImages = state.pendingImages.length > 0;
   refs.messageInput.disabled = state.chatBusy;
   refs.sendButton.disabled = state.chatBusy || (!hasText && !hasImages);
   refs.newSessionButton.disabled = state.chatBusy;
-  refs.voiceButton.disabled = state.chatBusy || !supported || isVoiceBusy;
+  refs.voiceButton.disabled = state.chatBusy || isVoiceBusy;
   refs.attachImageButton.disabled = state.chatBusy;
   renderPendingImages();
 }
@@ -244,11 +271,100 @@ function closeImageLightbox() {
   document.body.classList.remove("lightbox-open");
 }
 
+function openSettingsModal() {
+  refs.settingsModal.hidden = false;
+  setSettingsStatus("正在加载设置...");
+  request("/api/settings")
+    .then((data) => {
+      state.settings = {
+        ...(data.settings || {}),
+        ...loadLocalSettings(),
+      };
+      state.settingsDefaults = data.defaults || {};
+      populateSettingsForm();
+      setSettingsStatus("");
+      refs.openaiApiKeyInput.focus();
+    })
+    .catch((error) => {
+      populateSettingsForm();
+      setSettingsStatus(error.message || "设置加载失败", "error");
+    });
+}
+
+function closeSettingsModal() {
+  refs.settingsModal.hidden = true;
+  setSettingsStatus("");
+}
+
+function populateSettingsForm() {
+  const settings = state.settings || {};
+  const defaults = state.settingsDefaults || {};
+  refs.openaiApiKeyInput.value = settings.OPENAI_API_KEY || "";
+  setApiKeyVisible(false);
+  refs.openaiBaseUrlInput.value = settings.OPENAI_BASE_URL || "";
+  refs.openaiChatModelInput.value = settings.OPENAI_CHAT_MODEL || "";
+  refs.llmTemperatureInput.value = settings.ROBOTCLAW_LLM_TEMPERATURE || "";
+  refs.topKInput.value = settings.TOP_K || "";
+  refs.openaiBaseUrlInput.placeholder = defaults.OPENAI_BASE_URL || "代码默认值";
+  refs.openaiChatModelInput.placeholder = defaults.OPENAI_CHAT_MODEL || "代码默认值";
+  refs.llmTemperatureInput.placeholder = defaults.ROBOTCLAW_LLM_TEMPERATURE || "0";
+  refs.topKInput.placeholder = defaults.TOP_K || "4";
+}
+
+function setApiKeyVisible(visible) {
+  refs.openaiApiKeyInput.type = visible ? "text" : "password";
+  refs.apiKeyToggleButton.textContent = visible ? "隐藏" : "显示";
+  refs.apiKeyToggleButton.setAttribute("aria-pressed", String(visible));
+  refs.apiKeyToggleButton.setAttribute("aria-label", visible ? "隐藏 API_KEY" : "显示 API_KEY");
+}
+
+function toggleApiKeyVisibility() {
+  setApiKeyVisible(refs.openaiApiKeyInput.type === "password");
+}
+
+function setSettingsStatus(text = "", tone = "") {
+  const content = String(text || "").trim();
+  refs.settingsStatus.hidden = !content;
+  refs.settingsStatus.textContent = content;
+  refs.settingsStatus.classList.toggle("error", tone === "error");
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const payload = normalizeSettings({
+    OPENAI_API_KEY: refs.openaiApiKeyInput.value.trim(),
+    OPENAI_BASE_URL: refs.openaiBaseUrlInput.value.trim(),
+    OPENAI_CHAT_MODEL: refs.openaiChatModelInput.value.trim(),
+    ROBOTCLAW_LLM_TEMPERATURE: refs.llmTemperatureInput.value.trim(),
+    TOP_K: refs.topKInput.value.trim(),
+  });
+  refs.settingsSaveButton.disabled = true;
+  setSettingsStatus("正在保存...");
+  try {
+    if (!payload.OPENAI_API_KEY) {
+      throw new Error("API_KEY 不能为空");
+    }
+    if (payload.TOP_K && Number.parseInt(payload.TOP_K, 10) <= 0) {
+      throw new Error("TOP_K 必须大于 0");
+    }
+    if (payload.ROBOTCLAW_LLM_TEMPERATURE && Number.isNaN(Number.parseFloat(payload.ROBOTCLAW_LLM_TEMPERATURE))) {
+      throw new Error("TEMPERATURE 必须是数字");
+    }
+    saveLocalSettings(payload);
+    state.settings = payload;
+    setSettingsStatus("已保存");
+    window.setTimeout(closeSettingsModal, 500);
+    renderAll();
+  } catch (error) {
+    setSettingsStatus(error.message || "保存失败", "error");
+  } finally {
+    refs.settingsSaveButton.disabled = false;
+  }
+}
+
 function renderAll() {
   renderSessions();
   renderMessages();
-  renderConnection();
-  renderInteractionMode();
   renderComposerState();
   renderVoiceState();
 }
@@ -298,7 +414,6 @@ function ensureSessionForSending() {
     title: "新会话",
     preview: "暂无消息",
     messages: [],
-    interaction_mode: state.defaultInteractionMode || "qa",
   };
   state.sessions.unshift(draftSession);
   state.activeSessionId = draftSessionId;
@@ -365,16 +480,14 @@ async function bootstrap() {
   const data = await request("/api/bootstrap");
   state.sessions = data.sessions || [];
   state.activeSessionId = data.active_session_id || state.sessions[0]?.id || "";
-  state.interactionModes = data.interaction_modes || [];
-  state.defaultInteractionMode = data.default_interaction_mode || state.sessions[0]?.interaction_mode || state.defaultInteractionMode;
-  state.connection = data.connection || state.connection;
   state.speech = data.speech || state.speech;
+  state.settings = loadLocalSettings();
   renderAll();
 }
 
 function renderVoiceState() {
   const supported = Boolean(navigator.mediaDevices?.getUserMedia) && typeof window.MediaRecorder !== "undefined";
-  refs.voiceButton.disabled = state.chatBusy || !supported || isVoiceBusy;
+  refs.voiceButton.disabled = state.chatBusy || isVoiceBusy;
   refs.voiceButton.classList.toggle("listening", isRecording);
   refs.voiceButton.setAttribute("aria-pressed", String(isRecording));
   refs.voiceButton.title = state.chatBusy
@@ -424,22 +537,20 @@ async function sendChatPayload({ previewContent, requestPath, requestBody }) {
   }
   state.chatBusy = true;
   const session = ensureSessionForSending();
-  const pendingId = appendOptimisticMessages(session.id, previewContent, requestBody.images || []);
+  let pendingId = appendOptimisticMessages(session.id, previewContent, requestBody.images || []);
   setComposerStatus("");
   renderAll();
   try {
     if (String(session.id).startsWith("draft-")) {
       const created = await request("/api/sessions", {
         method: "POST",
-        body: JSON.stringify({
-          interaction_mode: session.interaction_mode || state.defaultInteractionMode || "qa",
-        }),
+        body: JSON.stringify({}),
       });
       state.activeSessionId = created.active_session_id;
       state.sessions = state.sessions.filter((item) => item.id !== session.id);
       upsertSession(created.session);
       promoteSession(state.activeSessionId);
-      appendOptimisticMessages(state.activeSessionId, previewContent, requestBody.images || []);
+      pendingId = appendOptimisticMessages(state.activeSessionId, previewContent, requestBody.images || []);
       renderAll();
     }
 
@@ -447,6 +558,7 @@ async function sendChatPayload({ previewContent, requestPath, requestBody }) {
       method: "POST",
       body: JSON.stringify({
         session_id: state.activeSessionId,
+        llm_settings: currentRequestSettings(),
         ...requestBody,
       }),
     });
@@ -475,9 +587,7 @@ async function createSession() {
   try {
     const data = await request("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({
-        interaction_mode: refs.interactionModeSelect.value || state.defaultInteractionMode || "qa",
-      }),
+      body: JSON.stringify({}),
     });
     state.activeSessionId = data.active_session_id;
     upsertSession(data.session);
@@ -488,76 +598,6 @@ async function createSession() {
   } finally {
     refs.newSessionButton.disabled = false;
   }
-}
-
-async function updateInteractionMode() {
-  if (state.chatBusy) return;
-  const session = activeSession();
-  const interactionMode = refs.interactionModeSelect.value || state.defaultInteractionMode || "qa";
-  if (!session || String(session.id || "").startsWith("draft-")) {
-    state.defaultInteractionMode = interactionMode;
-    if (session) {
-      session.interaction_mode = interactionMode;
-    }
-    renderInteractionMode();
-    return;
-  }
-  refs.interactionModeSelect.disabled = true;
-  try {
-    const data = await request("/api/session/mode", {
-      method: "POST",
-      body: JSON.stringify({
-        session_id: session.id,
-        interaction_mode: interactionMode,
-      }),
-    });
-    state.activeSessionId = data.active_session_id;
-    upsertSession(data.session);
-    promoteSession(state.activeSessionId);
-    renderAll();
-  } catch (error) {
-    window.alert(error.message || "模式更新失败");
-    renderAll();
-  }
-}
-
-async function connectRobot(event) {
-  event.preventDefault();
-  const form = new FormData(refs.connectionForm);
-  try {
-    state.connection = await request("/api/robot/connect", {
-      method: "POST",
-      body: JSON.stringify({
-        name: String(form.get("name") || "").trim(),
-        host: String(form.get("host") || "").trim(),
-        username: String(form.get("username") || "").trim(),
-        password: String(form.get("password") || ""),
-      }),
-    });
-    renderConnection();
-  } catch (error) {
-    window.alert(error.message);
-  }
-}
-
-async function disconnectRobot() {
-  try {
-    state.connection = await request("/api/robot/disconnect", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    renderConnection();
-  } catch (error) {
-    window.alert(error.message);
-  }
-}
-
-function togglePasswordVisibility() {
-  const isVisible = refs.connectPassword.type === "text";
-  refs.connectPassword.type = isVisible ? "password" : "text";
-  refs.passwordToggle.setAttribute("aria-pressed", String(!isVisible));
-  refs.passwordToggle.title = isVisible ? "显示密码" : "隐藏密码";
-  refs.passwordToggle.setAttribute("aria-label", isVisible ? "显示密码" : "隐藏密码");
 }
 
 async function toggleVoiceRecording() {
@@ -582,7 +622,12 @@ async function startVoiceRecording() {
   if (!navigator.mediaDevices?.getUserMedia || typeof window.MediaRecorder === "undefined") {
     throw new Error("当前浏览器不支持录音");
   }
-  recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  await ensureAudioInputAvailable();
+  try {
+    recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    throw new Error(describeMicrophoneError(error));
+  }
   recordingChunks = [];
   mediaRecorder = new MediaRecorder(recordingStream);
   mediaRecorder.addEventListener("dataavailable", (event) => {
@@ -595,6 +640,43 @@ async function startVoiceRecording() {
   isRecording = true;
   setComposerStatus("录音中，再点一次麦克风发送");
   renderVoiceState();
+}
+
+async function ensureAudioInputAvailable() {
+  if (typeof navigator.mediaDevices.enumerateDevices !== "function") {
+    return;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const hasAudioInput = devices.some((device) => device.kind === "audioinput");
+    if (devices.length > 0 && !hasAudioInput) {
+      throw new Error("没有检测到可用麦克风");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === "没有检测到可用麦克风") {
+      throw error;
+    }
+  }
+}
+
+function describeMicrophoneError(error) {
+  const name = String(error?.name || "");
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "没有检测到可用麦克风";
+  }
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    return "浏览器没有麦克风权限";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "麦克风正在被占用，或系统暂时无法访问";
+  }
+  if (name === "SecurityError") {
+    return "当前页面不允许访问麦克风，请使用 localhost/127.0.0.1 或 HTTPS 打开";
+  }
+  if (name === "OverconstrainedError") {
+    return "没有找到符合要求的麦克风设备";
+  }
+  return error?.message || "无法启动录音";
 }
 
 function stopVoiceRecording() {
@@ -684,6 +766,7 @@ async function transcribeVoiceBlob(blob, mimeType) {
       audio_base64: audioBase64,
       mime_type: mimeType,
       filename: defaultVoiceFilename(mimeType),
+      llm_settings: currentRequestSettings(),
     }),
   });
 }
@@ -782,17 +865,23 @@ function imageFilesFromDataTransfer(dataTransfer) {
 
 refs.sendButton.addEventListener("click", sendMessage);
 refs.newSessionButton.addEventListener("click", createSession);
-refs.connectionForm.addEventListener("submit", connectRobot);
-refs.disconnectButton.addEventListener("click", disconnectRobot);
-refs.passwordToggle.addEventListener("click", togglePasswordVisibility);
 refs.voiceButton.addEventListener("click", toggleVoiceRecording);
-refs.interactionModeSelect.addEventListener("change", updateInteractionMode);
 refs.attachImageButton.addEventListener("click", () => refs.imageInput.click());
 refs.imageInput.addEventListener("change", handleImageSelection);
+refs.settingsButton.addEventListener("click", openSettingsModal);
+refs.settingsForm.addEventListener("submit", saveSettings);
+refs.settingsCloseButton.addEventListener("click", closeSettingsModal);
+refs.settingsCancelButton.addEventListener("click", closeSettingsModal);
+refs.apiKeyToggleButton.addEventListener("click", toggleApiKeyVisibility);
 refs.imageLightboxClose.addEventListener("click", closeImageLightbox);
 refs.imageLightbox.addEventListener("click", (event) => {
   if (event.target === refs.imageLightbox) {
     closeImageLightbox();
+  }
+});
+refs.settingsModal.addEventListener("click", (event) => {
+  if (event.target === refs.settingsModal) {
+    closeSettingsModal();
   }
 });
 refs.messageInput.addEventListener("keydown", (event) => {
@@ -806,6 +895,10 @@ refs.messageInput.addEventListener("paste", handleComposerPaste);
 refs.messageInput.addEventListener("dragover", handleComposerDragOver);
 refs.messageInput.addEventListener("drop", handleComposerDrop);
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !refs.settingsModal.hidden) {
+    closeSettingsModal();
+    return;
+  }
   if (event.key === "Escape" && !refs.imageLightbox.hidden) {
     closeImageLightbox();
   }

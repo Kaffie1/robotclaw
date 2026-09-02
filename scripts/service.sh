@@ -7,7 +7,8 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNTIME_DIR="$ROOT_DIR/.runtime"
 PID_FILE="$RUNTIME_DIR/server.pid"
 LOG_FILE="$RUNTIME_DIR/server.log"
-CONDA_ENV="${ROBOTCLAW_CONDA_ENV:-langchain}"
+RUNTIME_LOG_FILE="$RUNTIME_DIR/runtime.log"
+CONDA_ENV="${ROBOTCLAW_CONDA_ENV:-py310}"
 PYTHON_BIN="${ROBOTCLAW_PYTHON:-}"
 PORT="${ROBOTCLAW_PORT:-8005}"
 
@@ -15,6 +16,7 @@ mkdir -p "$RUNTIME_DIR"
 
 clear_logs() {
   : >"$LOG_FILE"
+  : >"$RUNTIME_LOG_FILE"
 }
 
 server_command() {
@@ -116,13 +118,14 @@ is_running() {
 }
 
 start_server() {
+  clear_logs
+
   if is_running; then
     echo "RobotClaw server is already running (pid $(cat "$PID_FILE"))."
     return 0
   fi
 
   cd "$ROOT_DIR"
-  clear_logs
   start_server_process
   echo $! >"$PID_FILE"
   echo "RobotClaw server started (pid $(cat "$PID_FILE"))."
@@ -137,19 +140,14 @@ stop_server() {
 
   local pid
   pid="$(cat "$PID_FILE")"
-  kill "$pid"
+  kill -9 "$pid" >/dev/null 2>&1 || true
 
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
-      rm -f "$PID_FILE"
-      echo "RobotClaw server stopped."
-      return 0
-    fi
-    sleep 1
-  done
+  local listener_pid
+  listener_pid="$(find_listener_pid || true)"
+  if [[ -n "$listener_pid" && "$listener_pid" != "$pid" ]]; then
+    kill -9 "$listener_pid" >/dev/null 2>&1 || true
+  fi
 
-  echo "Server did not stop gracefully, sending SIGKILL."
-  kill -9 "$pid"
   rm -f "$PID_FILE"
   echo "RobotClaw server stopped."
 }

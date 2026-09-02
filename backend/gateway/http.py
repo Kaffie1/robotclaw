@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import ssl
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,14 +29,14 @@ def build_handler(app: GatewayApplication):
             if parsed.path == "/api/bootstrap":
                 self.send_json(app.bootstrap())
                 return
-            if parsed.path == "/api/robot/status":
-                self.send_json(app.ssh_manager.ui_payload())
-                return
             if parsed.path == "/api/llm/status":
                 self.send_json(app.llm_status())
                 return
             if parsed.path == "/api/speech/status":
                 self.send_json(app.speech_status())
+                return
+            if parsed.path == "/api/settings":
+                self.send_json(app.settings_payload())
                 return
             if parsed.path == "/api/chat/history":
                 query = self.parse_query(parsed.query)
@@ -51,19 +52,8 @@ def build_handler(app: GatewayApplication):
                 if parsed.path == "/api/sessions":
                     user_id = str(data.get("user_id", "u001")).strip() or "u001"
                     self.send_json(
-                        app.create_session(
-                            user_id,
-                            interaction_mode=str(data.get("interaction_mode", "")).strip(),
-                        ),
+                        app.create_session(user_id),
                         status=HTTPStatus.CREATED,
-                    )
-                    return
-                if parsed.path == "/api/session/mode":
-                    self.send_json(
-                        app.set_session_mode(
-                            session_id=str(data.get("session_id", "")).strip(),
-                            interaction_mode=str(data.get("interaction_mode", "")).strip(),
-                        )
                     )
                     return
                 if parsed.path == "/api/chat/send":
@@ -72,6 +62,7 @@ def build_handler(app: GatewayApplication):
                         user_id=str(data.get("user_id", "u001")).strip() or "u001",
                         content=str(data.get("content", "")),
                         images=data.get("images") if isinstance(data.get("images"), list) else [],
+                        llm_settings=data.get("llm_settings") if isinstance(data.get("llm_settings"), dict) else {},
                     )
                     self.send_json(payload)
                     return
@@ -83,6 +74,7 @@ def build_handler(app: GatewayApplication):
                         mime_type=str(data.get("mime_type", "")).strip(),
                         filename=str(data.get("filename", "")).strip(),
                         language=str(data.get("language", "")).strip(),
+                        llm_settings=data.get("llm_settings") if isinstance(data.get("llm_settings"), dict) else {},
                     )
                     self.send_json(payload)
                     return
@@ -92,6 +84,7 @@ def build_handler(app: GatewayApplication):
                         mime_type=str(data.get("mime_type", "")).strip(),
                         filename=str(data.get("filename", "")).strip(),
                         language=str(data.get("language", "")).strip(),
+                        llm_settings=data.get("llm_settings") if isinstance(data.get("llm_settings"), dict) else {},
                     )
                     self.send_json(
                         {
@@ -119,24 +112,6 @@ def build_handler(app: GatewayApplication):
                         )
                     )
                     return
-                if parsed.path == "/api/robot/connect":
-                    self.send_json(
-                        app.connect_robot(
-                            name=str(data.get("name", "")),
-                            host=str(data.get("host", "")),
-                            port=data.get("port", 22),
-                            username=str(data.get("username", "")),
-                            password=str(data.get("password", "")),
-                            private_key_path=str(data.get("private_key_path", "")),
-                            ros_version=str(data.get("ros_version", "")),
-                            workspace=str(data.get("workspace", "")),
-                            setup_script=str(data.get("setup_script", "")),
-                        )
-                    )
-                    return
-                if parsed.path == "/api/robot/disconnect":
-                    self.send_json(app.disconnect_robot())
-                    return
                 if parsed.path == "/api/llm/activate":
                     self.send_json(
                         app.activate_llm_profile(
@@ -152,6 +127,9 @@ def build_handler(app: GatewayApplication):
                         ),
                         status=HTTPStatus.CREATED,
                     )
+                    return
+                if parsed.path == "/api/settings":
+                    self.send_json(app.save_settings(data))
                     return
             except ValueError as exc:
                 logger.warning("Bad request on %s: %s", parsed.path, exc)
@@ -217,11 +195,23 @@ def build_handler(app: GatewayApplication):
     return AppHandler
 
 
-def run_dev_server(root: Path, host: str = "0.0.0.0", port: int = 8005) -> None:
+def run_dev_server(
+    root: Path,
+    host: str = "0.0.0.0",
+    port: int = 8005,
+    ssl_cert: str = "",
+    ssl_key: str = "",
+) -> None:
     app = GatewayApplication(root=root)
     handler = build_handler(app)
     server = ThreadingHTTPServer((host, port), handler)
-    logger.info("RobotClaw server running at http://%s:%s/frontend/", host, port)
+    scheme = "http"
+    if ssl_cert and ssl_key:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=ssl_cert, keyfile=ssl_key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    logger.info("RobotClaw server running at %s://%s:%s/frontend/", scheme, host, port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

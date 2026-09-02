@@ -60,10 +60,17 @@ class SessionManager:
                 return self._store.get_task(session.current_task_id)
             return self.create_task(session_id, title=title, task_type="diagnose")
 
-    def record_turn(self, session_id: str, role: str, content: str) -> None:
+    def record_turn(self, session_id: str, role: str, content: str, metadata: dict | None = None) -> None:
         with self._lock:
             memory = self._memory_manager.get_session_memory(session_id)
-            memory.chat_history.append(ChatTurn(role=role, content=content, created_at=now_hhmm()))
+            memory.chat_history.append(
+                ChatTurn(
+                    role=role,
+                    content=content,
+                    created_at=now_hhmm(),
+                    metadata=dict(metadata or {}),
+                )
+            )
             memory.latest_summary = content.replace("\n", " ").strip()[:120]
             if role == "user":
                 append_question(session_id, content)
@@ -137,7 +144,7 @@ class SessionManager:
         user = UserIdentity(user_id=user_id, username=user_id)
         session = self.create_session(user, interaction_mode=interaction_mode)
         task = self.create_task(session.session_id, "新会话", task_type="diagnose")
-        self.record_turn(session.session_id, "assistant", "新的会话已创建。你可以直接输入机器人问题，或先连接右侧机器人。")
+        self.record_turn(session.session_id, "assistant", "新的会话已创建。你可以直接输入知识库问题。")
         self.set_task_status(task.task_id, "created")
         self.update_session_from_chat(session.session_id, "新会话")
         return {

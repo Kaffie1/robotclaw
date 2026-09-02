@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -15,7 +16,13 @@ logger = get_logger("server")
 
 def main() -> None:
     logger.info("Starting RobotClaw dev server")
-    run_dev_server(root=ROOT_DIR)
+    run_dev_server(
+        root=ROOT_DIR,
+        host=os.getenv("ROBOTCLAW_HOST", "0.0.0.0"),
+        port=int(os.getenv("ROBOTCLAW_PORT", "8005")),
+        ssl_cert=os.getenv("ROBOTCLAW_SSL_CERT", ""),
+        ssl_key=os.getenv("ROBOTCLAW_SSL_KEY", ""),
+    )
 
 
 if __name__ == "__main__":

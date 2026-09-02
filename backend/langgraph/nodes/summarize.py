@@ -8,36 +8,13 @@ from backend.runtime.models import RouteDecision, SolutionItem
 def build_solutions(
     *,
     connected: bool,
-    robot_ref: str,
-    host: str,
     analysis: dict[str, str],
     planned_tool_count: int,
 ) -> list[SolutionItem]:
-    if planned_tool_count <= 0:
-        return []
-
-    if not connected:
-        return [
-            SolutionItem(
-                title="先连接机器人",
-                detail="当前已完成问题理解、知识选择和工具规划，但机器人未连接，无法继续采集事实。",
-            ),
-            SolutionItem(
-                title="连接后继续执行",
-                detail="连接目标机器人后，可以继续执行 ToolExecutor 并进入真实诊断阶段。",
-            ),
-        ]
-
-    return [
-        SolutionItem(
-            title="进入执行阶段",
-            detail=f"当前已连接 {robot_ref}（{host}），已完成第一批工具执行，可继续深化分析。",
-        ),
-        SolutionItem(
-            title="保留自动修复入口",
-            detail=f"当前分析结论：{analysis['summary']}。后续可在 PermissionGuard 后挂接自动修复动作。",
-        ),
-    ]
+    del connected
+    del analysis
+    del planned_tool_count
+    return []
 
 
 def compose_answer(
@@ -47,16 +24,13 @@ def compose_answer(
     connected: bool,
     planned_tool_count: int,
 ) -> str:
+    del solutions
+    del connected
+    del planned_tool_count
     lines = [analysis.get("summary", "").strip() or "当前已形成阶段性结论。"]
     detail = str(analysis.get("detail", "") or "").strip()
     if _should_include_user_detail(detail):
         lines.append(detail)
-    elif planned_tool_count > 0 and not connected:
-        lines.append("当前需要先满足外部连接条件后再继续执行。")
-    elif solutions:
-        suggestion = _pick_user_visible_solution(solutions)
-        if suggestion:
-            lines.append(suggestion)
     return "\n".join(lines)
 
 
@@ -64,7 +38,6 @@ def summarize_response_node(state: dict) -> dict:
     runtime_state = state["runtime_state"]
     diagnosis = state["diagnosis"]
     short_memory = state["short_memory"]
-    envelope = state["envelope"]
     request = state["request"]
     intent = state.get("intent") or short_memory.scratchpad.get("intent") or {}
     knowledge = state.get("knowledge") or short_memory.scratchpad.get("knowledge") or {}
@@ -81,8 +54,6 @@ def summarize_response_node(state: dict) -> dict:
 
     diagnosis.solutions = build_solutions(
         connected=state["connected"],
-        robot_ref=envelope.robot_config.robot_ref,
-        host=envelope.robot_config.host,
         analysis=analysis,
         planned_tool_count=len(runtime_state.planned_tools),
     )

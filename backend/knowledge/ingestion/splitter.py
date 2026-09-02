@@ -552,7 +552,11 @@ def split_markdown_documents(
         if len(document.page_content.strip()) <= chunk_size:
             return [document]
         if selected_level >= 4:
-            return [document]
+            return split_document_recursively(
+                document,
+                chunk_size=chunk_size,
+                chunk_overlap=0,
+            )
 
         child_level = selected_level + 1
         child_sections = split_document_by_heading_level(document, child_level)
@@ -563,7 +567,11 @@ def split_markdown_documents(
             and section.metadata.get("section_title") is not None
         ]
         if len(meaningful_sections) <= 1:
-            return [document]
+            return split_document_recursively(
+                document,
+                chunk_size=chunk_size,
+                chunk_overlap=0,
+            )
 
         return pack_sections_by_chunk_size(meaningful_sections)
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
-InteractionMode = Literal["playbook", "qa", "agent"]
+InteractionMode = Literal["qa"]
 
 
 TaskStatus = Literal[
@@ -37,7 +37,6 @@ class SessionState:
     session_id: str
     user: UserIdentity
     current_task_id: str = ""
-    current_robot_ref: str = ""
     interaction_mode: InteractionMode = "qa"
     status: TaskStatus = "created"
     active_topic: str = ""
@@ -62,10 +61,10 @@ class ChatTurn:
     role: Literal["user", "assistant", "system", "tool"]
     content: str
     created_at: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def normalize_interaction_mode(value: str, default: InteractionMode = "qa") -> InteractionMode:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"playbook", "qa", "agent"}:
-        return normalized
-    return default
+    del value
+    del default
+    return "qa"
