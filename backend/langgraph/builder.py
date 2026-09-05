@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from backend.gateway.models import ChatRequest
@@ -31,7 +30,7 @@ from backend.runtime.models import DiagnosisSummary, RuntimeEnvelope, RuntimeSta
 from backend.runtime.workflow import publish_workflow_event
 from backend.runtime.workflow.events import WorkflowEventBus
 from backend.runtime.workflow.store import WorkflowStore
-from backend.shared import get_logger
+from backend.shared import get_logger, strip_image_attachment_summary
 
 try:
     from langgraph.graph import END, START, StateGraph
@@ -42,9 +41,6 @@ except Exception:
 
 
 logger = get_logger("langgraph.builder")
-
-ATTACHMENT_SUMMARY_PATTERN = re.compile(r"\s*\[\d+\s*张图片\]\s*")
-
 
 def build_chat_graph() -> Any:
     if StateGraph is None or START is None or END is None:
@@ -254,8 +250,7 @@ def _build_recent_conversation_history(
 
 
 def _history_content_for_model(content: str) -> str:
-    normalized = str(content or "").strip()
-    return ATTACHMENT_SUMMARY_PATTERN.sub(" ", normalized).strip()
+    return strip_image_attachment_summary(content)
 
 
 def _run_chat_graph_fallback(state: ChatGraphState) -> ChatGraphState:

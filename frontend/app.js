@@ -183,7 +183,8 @@ function renderMessageBubble(bubble, message) {
 }
 
 function displayMessageContent(content) {
-  return String(content || "").replace(ATTACHMENT_SUMMARY_PATTERN, " ").trim();
+  const text = String(content || "").replace(ATTACHMENT_SUMMARY_PATTERN, " ").trim();
+  return text === "图片" ? "" : text;
 }
 
 function formatMessageFooter(message) {
@@ -515,7 +516,7 @@ async function sendMessage() {
   const content = refs.messageInput.value.trim();
   const images = state.pendingImages;
   if (!content && images.length <= 0) return;
-  const previewContent = images.length > 0 ? `${content || "图片"} [${images.length} 张图片]` : content;
+  const previewContent = content;
   refs.messageInput.value = "";
   state.pendingImages = [];
   setComposerStatus("");

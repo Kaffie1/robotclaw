@@ -12,7 +12,7 @@ from backend.runtime.models import DiagnosisSummary, RuntimeEnvelope
 from backend.memory import MemoryManager
 from backend.runtime import RuntimeService
 from backend.session import SessionManager
-from backend.shared import get_logger, load_env_file
+from backend.shared import get_logger, load_env_file, strip_image_attachment_summary
 from backend.shared.config import SPEECH_AUTO_SEND
 
 
@@ -222,7 +222,12 @@ class GatewayApplication:
         task = self.session_manager.ensure_active_task(session_id, title=display_content)
         session = self.session_manager.get_session_state(session_id)
         self.session_manager.set_task_status(task.task_id, "running", current_node="runtime")
-        self.session_manager.record_turn(session_id, "user", display_content)
+        self.session_manager.record_turn(
+            session_id,
+            "user",
+            display_content,
+            metadata=self._display_request_metadata(request),
+        )
 
         envelope = RuntimeEnvelope(
             session=session,
@@ -292,11 +297,12 @@ class GatewayApplication:
         return LLMClient(config=llm_config_from_settings(llm_settings, base=base_config))
 
     def _display_request_content(self, request: ChatRequest) -> str:
-        content = str(request.content or "").strip()
+        return strip_image_attachment_summary(request.content)
+
+    def _display_request_metadata(self, request: ChatRequest) -> dict:
         if not request.images:
-            return content
-        image_label = f"[{len(request.images)} 张图片]"
-        return f"{content} {image_label}".strip() if content else f"图片 {image_label}"
+            return {}
+        return {"images": list(request.images)}
 
     def _decode_audio_base64(self, value: str) -> bytes:
         encoded = str(value or "").strip()

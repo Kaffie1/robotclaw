@@ -3,9 +3,7 @@ __pycache__/
 .vscode/
 .runtime/
 # .codex/
-.env
 asr/
 !data/.gitkeep
 doc/
 tests/
-data/

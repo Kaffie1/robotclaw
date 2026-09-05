@@ -60,7 +60,7 @@ from backend.shared.config import (
 from backend.shared.env import load_env_file
 from backend.shared.ids import next_event_id, next_request_id, next_resume_token, next_session_id, next_task_id, next_tool_call_id
 from backend.shared.log import get_logger, setup_logging
-from backend.shared.text import infer_title
+from backend.shared.text import infer_title, strip_image_attachment_summary
 from backend.shared.time import now_hhmm, now_iso
 
 __all__ = [
@@ -133,4 +133,5 @@ __all__ = [
     "now_hhmm",
     "now_iso",
     "setup_logging",
+    "strip_image_attachment_summary",
 ]
