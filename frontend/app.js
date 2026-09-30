@@ -407,14 +407,18 @@ async function sendMessage() {
   state.pendingImages = [];
   setComposerStatus("");
   renderComposerState();
-  await sendChatPayload({
-    previewContent,
-    requestPath: "/api/chat/send",
-    requestBody: {
-      content,
-      images,
-    },
-  });
+  try {
+    await sendChatPayload({
+      previewContent,
+      requestPath: "/api/chat/send",
+      requestBody: {
+        content,
+        images,
+      },
+    });
+  } catch (error) {
+    setComposerStatus(error.message || "发送失败", "error");
+  }
 }
 
 async function sendChatPayload({ previewContent, requestPath, requestBody }) {
@@ -424,7 +428,7 @@ async function sendChatPayload({ previewContent, requestPath, requestBody }) {
   }
   state.chatBusy = true;
   const session = ensureSessionForSending();
-  const pendingId = appendOptimisticMessages(session.id, previewContent, requestBody.images || []);
+  let pendingId = appendOptimisticMessages(session.id, previewContent, requestBody.images || []);
   setComposerStatus("");
   renderAll();
   try {
@@ -439,7 +443,7 @@ async function sendChatPayload({ previewContent, requestPath, requestBody }) {
       state.sessions = state.sessions.filter((item) => item.id !== session.id);
       upsertSession(created.session);
       promoteSession(state.activeSessionId);
-      appendOptimisticMessages(state.activeSessionId, previewContent, requestBody.images || []);
+      pendingId = appendOptimisticMessages(state.activeSessionId, previewContent, requestBody.images || []);
       renderAll();
     }
 

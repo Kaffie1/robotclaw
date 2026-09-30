@@ -352,10 +352,23 @@ def _build_raw_payload(response: Any) -> dict[str, Any]:
 
 
 def _build_extra_body() -> dict[str, Any]:
-    return {
-        "reasoning_split": OPENAI_ENABLE_REASONING_SPLIT,
-        "think": OPENAI_THINK,
-    }
+    extra_body: dict[str, Any] = {}
+    if OPENAI_ENABLE_REASONING_SPLIT:
+        extra_body["reasoning_split"] = True
+
+    think = _normalize_optional_extra_body_value(OPENAI_THINK)
+    if think is not None:
+        extra_body["think"] = think
+    return extra_body
+
+
+def _normalize_optional_extra_body_value(value: str) -> Any | None:
+    normalized = str(value or "").strip()
+    if not normalized or normalized.lower() in {"0", "false", "no", "off", "none", "null"}:
+        return None
+    if normalized.lower() in {"1", "true", "yes", "on"}:
+        return True
+    return normalized
 
 
 def _clip_text(text: str, limit: int = 240) -> str:

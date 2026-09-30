@@ -49,7 +49,7 @@ def load_llm_config() -> LLMConfig:
         profile_id="default",
         label="Default",
         provider=LLM_PROVIDER,
-        model=LLM_MODEL,
+        model=LLM_MODEL or OPENAI_CHAT_MODEL,
         asr_provider=_default_asr_provider(),
         asr_model=LLM_ASR_MODEL or OPENAI_ASR_MODEL,
         asr_language=LLM_ASR_LANGUAGE,
@@ -57,8 +57,8 @@ def load_llm_config() -> LLMConfig:
         max_tokens=LLM_MAX_TOKENS,
         timeout_seconds=LLM_TIMEOUT,
         asr_timeout_seconds=LLM_ASR_TIMEOUT,
-        api_base=LLM_API_BASE,
-        api_key=LLM_API_KEY,
+        api_base=LLM_API_BASE or OPENAI_BASE_URL,
+        api_key=LLM_API_KEY or OPENAI_API_KEY,
     )
 
 
