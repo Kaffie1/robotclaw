@@ -1,1 +1,0 @@
-"""RobotClaw backend package."""

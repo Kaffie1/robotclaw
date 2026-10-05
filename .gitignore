@@ -1,9 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+apps/web/dist/
+
+# OS files
+.DS_Store
+
+# pi agent data (keep the project-level conversation-only policy)
+.pi/*
+!.pi/settings.json
+.pi-web/
+.pi-subagents/
+
+# Editor data
+.vscode/
+
+# Plugin dependencies (installed per-plugin)
+plugins/*/node_modules/
+vendor/pi-web-ui/plugins/*/node_modules/
+
+# 插件运行期数据（书源/书架/进度等，属于用户数据不入库）
+plugins/*/storage/
+vendor/pi-web-ui/plugins/*/storage/
+
+# Python services
 __pycache__/
 *.py[cod]
-.vscode/
-.runtime/
-# .codex/
-asr/
-!data/.gitkeep
-doc/
-tests/
+.venv/
+.pytest_cache/
+
+# Scratch/test temp files
+tests/scratch/
+
+# Local editor and backup files
+.zcodeignore
+*.bak
+
+# pi-web-ui Electron 桌面版构建产物
+release/
+
+# 独立社区插件清单仓库工作区
+plugin-registry/
+
+# 本地临时调试截图
+dev/wechat-shot*.png

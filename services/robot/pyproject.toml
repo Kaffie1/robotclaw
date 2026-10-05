@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "robotclaw-robot"
+version = "0.1.0"
+description = "RobotClaw ROS and recovery service"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/robotclaw_robot"]

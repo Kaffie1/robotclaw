@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "robotclaw-knowledge"
+version = "0.1.0"
+description = "RobotClaw knowledge and RAG service"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+vector = ["sentence-transformers>=3,<6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/robotclaw_knowledge"]
